@@ -1,99 +1,106 @@
-# 联邦学习客户端选择对比实验
+# Federated Learning with Shapley Value and Energy-aware Scheduling
 
 ## 项目简介
 
-本项目实现了三种联邦学习客户端选择方法的对比实验：
-1. **Random Selection（随机选择）** - 基线方法
-2. **Power of Choice (PoC)** - 两阶段选择方法
-3. **Dual Scheduling（双重调度）** - Shapley值 + 能量感知 + 李雅普诺夫优化 + 差分隐私
+本项目实现了基于 **Shapley值 + 能量感知 + 李雅普诺夫优化** 的联邦学习客户端双重调度方法，并与4种基线方法进行对比实验。
+
+## 方法概览
+
+| 方法 | 说明 |
+|------|------|
+| **Dual Scheduling（本文方法）** | Shapley值 + 能量感知 + 李雅普诺夫优化 + AES-256-GCM加密 |
+| **FedAvg** | 随机客户端选择（基线） |
+| **PoC** | Power of Choice，基于本地损失的两阶段选择 |
+| **UCB** | UCB1 Bandit客户端选择 |
+| **FedProx** | 近端项正则化，缓解Non-IID漂移 |
 
 ## 项目结构
 
 ```
 FLSV/
 ├── src/
-│   ├── federated_main.py          # 主程序
-│   ├── options.py                 # 命令行参数
-│   ├── models.py                  # 神经网络模型
-│   ├── update.py                  # 本地训练
-│   ├── utils.py                   # 工具函数
-│   ├── sampling.py                # Non-IID数据采样
-│   ├── selection.py               # 客户端选择方法
-│   ├── shapley.py                 # Shapley值计算
-│   ├── energy.py                  # 能量模型
-│   ├── lyapunov_optimizer.py      # 李雅普诺夫优化器
-│   └── plot_smoothed_comparison.py # 对比图绘制
-├── run_poc_vs_triple.bat          # 对比实验批处理
+│   ├── federated_main.py       # 主程序
+│   ├── options.py              # 命令行参数
+│   ├── models.py               # 神经网络模型（CNN / MLP）
+│   ├── update.py               # 本地训练（LocalUpdate / LocalUpdateFedProx）
+│   ├── utils.py                # 工具函数
+│   ├── sampling.py             # Non-IID数据采样（Dirichlet分布）
+│   ├── selection.py            # 客户端选择策略
+│   ├── shapley.py              # Shapley值计算（GTG-Shapley）
+│   ├── energy.py               # 无线信道能量模型
+│   ├── lyapunov_optimizer.py   # 李雅普诺夫优化器
+│   ├── crypto_utils.py         # AES-256-GCM梯度加密
+│   └── plot.py                 # 实验结果可视化
+├── run_baseline_comparison.bat  # 主对比实验（5种方法）
+├── run_channel_robustness.bat   # 信道鲁棒性实验（σ²=0.5/1.0/3.0）
+├── run_vs_fedavg_crypto.bat     # 加密消融实验
+├── requirements.txt
 └── README.md
 ```
 
 ## 快速开始
 
-### 运行对比实验
+### 安装依赖
 
 ```bash
-run_poc_vs_triple.bat
+pip install -r requirements.txt
 ```
 
-该脚本依次运行三个实验：
-1. Random Selection
-2. Power of Choice (d=30)
-3. Dual Scheduling
+### 运行主对比实验（5种方法）
 
-### 实验参数
+```bash
+run_baseline_comparison.bat
+```
 
-- 数据集: CIFAR-10
-- 客户端总数: 100
-- 每轮选择: 10
-- 训练轮次: 100
-- 本地训练: 5 epochs
-- 批大小: 32
-- 学习率: 0.01
-- Non-IID: Dirichlet α=0.1
+### 运行信道鲁棒性实验
 
-### 查看结果
+```bash
+run_channel_robustness.bat
+```
 
-结果保存在 `save/objects/`：
-- `compare_random.pkl`
-- `compare_poc.pkl`
-- `compare_dual.pkl`
+### 可视化结果
 
-绘制对比图：
 ```bash
 cd src
-python plot_smoothed_comparison.py --pkl_dir ../save/objects
+# 修改 plot.py 中的 SAVE_DIR 为对应实验文件夹路径
+python plot.py
 ```
 
-## 三种方法说明
+## 实验配置
 
-### 1. Random Selection
-每轮随机选择K个客户端，作为基线。
+| 参数 | 值 |
+|------|----|
+| 数据集 | CIFAR-10 |
+| 模型 | CNN |
+| 客户端总数 | 100 |
+| 每轮选择 | 10 |
+| 训练轮次 | 100 |
+| 本地训练 epochs | 2 |
+| 批大小 | 32 |
+| 学习率 | 0.01 |
+| 数据分布 | Non-IID（Dirichlet α=0.1） |
+| 初始能量 | 500.0 |
+| 能量阈值 | 50.0 |
+| Lyapunov V | 10.0 |
+| 能量预算 | 5.0 |
 
-### 2. Power of Choice (PoC)
-两阶段选择：
-- 随机采样 d=30 个候选
-- 选择损失最大的 K=10 个
+## 主要特性
 
-### 3. Dual Scheduling
-综合两个维度的客户端选择方法：
-
-**Shapley值** (权重0.7)：评估客户端对模型的边际贡献
-**能量感知** (权重0.3)：考虑客户端剩余能量（初始800，阈值80）
-**李雅普诺夫优化**：动态调整Shapley和能量权重，平衡性能与资源约束
-**差分隐私（CDP）**：梯度裁剪(1.0) + 噪声添加(0.1)，保护训练数据隐私
-
-## 差分隐私
-
-中心化差分隐私（CDP）：
-- 梯度裁剪: max_norm=1.0
-- 噪声添加: σ=0.1
+- **Shapley值评估**：GTG-Shapley 算法评估客户端对全局模型的边际贡献
+- **能量感知调度**：基于无线信道模型（Rayleigh衰落）建模客户端能耗
+- **李雅普诺夫优化**：动态平衡模型性能与长期能量约束
+- **AES-256-GCM加密**：梯度传输加密，防御诚实但好奇的服务器
+- **信道鲁棒性**：支持不同噪声方差（σ²）下的性能评估
 
 ## 依赖环境
 
 ```
-Python 3.6+
-PyTorch
+Python 3.8+
+torch
 torchvision
 numpy
 matplotlib
+pycryptodome
+tensorboard
+tqdm
 ```
