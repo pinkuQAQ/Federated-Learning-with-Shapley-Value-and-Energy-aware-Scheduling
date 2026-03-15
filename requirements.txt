@@ -1,12 +1,14 @@
-# Core dependencies for Federated Learning with Energy-Aware Client Selection
+# Core dependencies for Federated Learning with Shapley Value and Energy-aware Scheduling
 torch>=1.8.0
 torchvision>=0.9.0
 numpy>=1.19.0
-tensorboardX>=2.0
 matplotlib>=3.3.0
-seaborn>=0.11.0
 tqdm>=4.50.0
 Pillow>=8.0.0
+tensorboard>=2.0
+pycryptodome>=3.10.0
+scipy>=1.6.0
 
-# Optional: for better performance
+# Optional
+seaborn>=0.11.0
 scikit-learn>=0.24.0
