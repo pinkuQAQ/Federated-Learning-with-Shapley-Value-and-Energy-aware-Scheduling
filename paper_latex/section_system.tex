@@ -1,0 +1,110 @@
+\section{System Model}
+
+\input{section_notation}
+
+\subsection{Federated Learning Framework}
+
+We consider a federated learning system consisting of one central parameter server and $N$ edge devices (clients), denoted by the set $\mathcal{N} = \{1, 2, \ldots, N\}$. Each client $n$ possesses a local private dataset $\mathcal{D}_n$ with $|\mathcal{D}_n|$ samples, and the goal is to collaboratively train a global model $w \in \mathbb{R}^d$ that minimizes the global loss function:
+\begin{equation}
+F(w) = \sum_{n=1}^{N} p_n F_n(w)
+\end{equation}
+where $p_n = |\mathcal{D}_n| / \sum_{i=1}^{N} |\mathcal{D}_i|$ represents the data proportion of client $n$ (with $\sum_{n=1}^{N} p_n = 1$), and $F_n(w) = \mathbb{E}_{(x,y) \sim \mathcal{D}_n}[\ell(w; x, y)]$ is the local loss function with $\ell(\cdot)$ being the loss function (e.g., cross-entropy for classification tasks).
+
+\textbf{Training Protocol:} The federated learning process proceeds in $T$ communication rounds. In each round $t$:
+
+\begin{enumerate}
+\item \textbf{Global Model Broadcasting:} The server broadcasts the current global model $w_t$ to a selected subset of clients $\mathcal{S}_t \subseteq \mathcal{N}$ with $|\mathcal{S}_t| = K \ll N$.
+
+\item \textbf{Local Training:} Each selected client $n \in \mathcal{S}_t$ performs local training for $E$ epochs using stochastic gradient descent (SGD) on its local dataset $\mathcal{D}_n$, starting from $w_t$. The local model update is:
+\begin{equation}
+w_n^{t+1} = w_t - \eta \nabla F_n(w_t)
+\end{equation}
+where $\eta$ is the learning rate. The model difference is $\Delta w_n = w_n^{t+1} - w_t$.
+
+\item \textbf{Model Upload:} Each client $n \in \mathcal{S}_t$ uploads its model update $\Delta w_n$ to the server.
+
+\item \textbf{Global Aggregation:} The server aggregates the received updates using weighted FedAvg, where each client's contribution is proportional to its local dataset size:
+\begin{equation}
+w_{t+1} = \sum_{n \in \mathcal{S}_t} \frac{|\mathcal{D}_n|}{\sum_{i \in \mathcal{S}_t} |\mathcal{D}_i|} w_n^{t+1}
+\end{equation}
+\end{enumerate}
+
+The key challenge lies in the client selection strategy for determining $\mathcal{S}_t$ at each round, which significantly impacts convergence speed, model accuracy, and resource efficiency.
+
+\subsection{Non-IID Data Distribution}
+
+In real-world federated learning scenarios, data across clients is typically non-independent and identically distributed (non-IID), meaning that the local data distributions $\mathcal{D}_n$ differ significantly across clients. This heterogeneity poses substantial challenges to model convergence and performance.
+
+\textbf{Dirichlet Distribution Modeling:} We model the non-IID data distribution using the Dirichlet distribution, a widely adopted approach in federated learning research. Specifically, for a classification task with $C$ classes, the class distribution of client $n$ is sampled as:
+\begin{equation}
+p_n = (p_{n,1}, p_{n,2}, \ldots, p_{n,C}) \sim \text{Dir}(\alpha)
+\end{equation}
+where $\alpha > 0$ is the concentration parameter controlling the degree of heterogeneity:
+\begin{itemize}
+\item $\alpha \to \infty$: The distribution approaches uniform, resulting in i.i.d. data across clients.
+\item $\alpha \to 0$: The distribution becomes highly skewed, with each client possessing data from only a few classes (extreme non-IID).
+\item $\alpha = 0.1$: Our experimental setting, representing extreme heterogeneity where clients have highly imbalanced class distributions.
+\end{itemize}
+
+\textbf{Impact on Convergence:} Non-IID data introduces gradient divergence across clients, leading to slower convergence compared to i.i.d. settings, increased variance in gradient estimates, and potential model drift where the global model favors clients with dominant data distributions. This motivates the need for intelligent client selection mechanisms that account for data heterogeneity and prioritize clients with high marginal contributions to the global model.
+
+\subsection{Wireless Channel and Energy Model}
+
+Edge devices in federated learning systems are typically battery-powered and communicate with the server over wireless channels. We model both the wireless channel conditions and energy consumption to capture the resource constraints in practical deployments.
+
+\textbf{Channel Model:} We adopt the Rayleigh fading channel model, commonly used for non-line-of-sight wireless communications. The channel coefficient between client $n$ and the server at round $t$ is modeled as:
+\begin{equation}
+h_n(t) \sim \mathcal{CN}(0, 1)
+\end{equation}
+where $\mathcal{CN}(0, 1)$ denotes the complex Gaussian distribution with zero mean and unit variance. The channel power gain is $|h_n(t)|^2$, which follows an exponential distribution.
+
+\textbf{Energy Consumption Model:} The total energy consumed by client $n$ in round $t$ comprises transmission energy and computation energy:
+\begin{equation}
+E_n(t) = E_{\text{trans},n}(t) + E_{\text{comp},n}(t)
+\end{equation}
+
+The transmission energy is inversely proportional to the channel quality:
+\begin{equation}
+E_{\text{trans},n}(t) = \min\left(\frac{\sigma^2}{|h_n(t)|^2}, E_{\max}\right)
+\end{equation}
+where $\sigma^2$ represents the noise power and $E_{\max}$ is an upper bound to prevent extreme values from poor channel conditions.
+
+The computation energy for local training is:
+\begin{equation}
+E_{\text{comp},n}(t) = \kappa \cdot f^2 \cdot C_{\text{cyc}} \cdot D_n
+\end{equation}
+where $\kappa$ is the effective switched capacitance coefficient of the CPU, $f$ is the CPU frequency, $C_{\text{cyc}}$ is the number of CPU cycles per training sample, and $D_n = |\mathcal{D}_n|$ is the local dataset size.
+
+\textbf{Residual Energy Tracking:} Each client $n$ maintains a cumulative residual energy $E_{\text{remain},n}(t)$, initialized to $E_{\text{init}}$ at the beginning of training. When client $n$ is selected in round $t$ (denoted by indicator $a_n(t) = 1$), its residual energy is updated as:
+\begin{equation}
+E_{\text{remain},n}(t+1) = E_{\text{remain},n}(t) - a_n(t) \cdot E_n(t)
+\end{equation}
+For unselected clients ($a_n(t) = 0$), the residual energy remains unchanged.
+
+\textbf{Energy Constraint:} To ensure long-term sustainability, we impose an energy threshold constraint:
+\begin{equation}
+E_{\text{remain},n}(t) \geq E_{\text{threshold}}
+\end{equation}
+Clients whose residual energy falls below $E_{\text{threshold}}$ are excluded from the candidate pool for selection.
+
+\subsection{Security Model}
+
+While federated learning avoids direct data sharing, model updates can still leak sensitive information about clients' private data through gradient inversion attacks. To protect gradient confidentiality and integrity during transmission, we integrate AES-256-GCM authenticated encryption into the federated learning pipeline.
+
+\textbf{Threat Model:} We adopt the honest-but-curious (semi-honest) server model, which is the standard assumption in federated learning security literature. The server faithfully executes the protocol but may attempt to infer private information from received model updates. External eavesdroppers are also considered as adversaries.
+
+\textbf{AES-256-GCM Encryption:} Each client $n$ holds an independent 256-bit session key $k_n$ established during initialization. Before uploading its model update $\Delta w_n$, client $n$ encrypts it using AES-GCM:
+\begin{equation}
+c_n = \text{AES-GCM}_{k_n}(\text{Serialize}(\Delta w_n), \text{nonce}_n)
+\end{equation}
+where $\text{nonce}_n$ is a fresh 96-bit random nonce generated for each upload, and the output $c_n = (\text{ciphertext}, \text{tag})$ includes a 128-bit authentication tag.
+
+\textbf{Server-Side Processing:} Upon receiving $c_n$, the server decrypts and authenticates:
+\begin{equation}
+\Delta w_n = \text{AES-GCM-Decrypt}_{k_n}(c_n, \text{nonce}_n)
+\end{equation}
+The server uses $\Delta w_n$ ephemerally for Shapley value computation and model aggregation, then immediately destroys the plaintext. Only the ciphertext $c_n$ is retained for archival purposes.
+
+\textbf{Security Properties:} AES-256-GCM provides: (1) \textit{confidentiality}: ciphertext is computationally indistinguishable from random under IND-CPA, protecting gradient contents from eavesdroppers; (2) \textit{integrity}: the authentication tag detects any tampering with the ciphertext; (3) \textit{zero accuracy loss}: encryption is applied post-training and decrypted before aggregation, leaving model training completely unaffected.
+
+\textbf{Comparison with Differential Privacy:} Unlike CDP which adds Gaussian noise to gradients and inevitably degrades model accuracy, AES-256-GCM operates purely at the transmission layer. The privacy guarantee is cryptographic rather than information-theoretic, and is incompatible with honest-but-curious server computation on ciphertext. This trade-off is appropriate when the server is semi-trusted and the primary concern is protecting gradient transmission from external observers or post-hoc data leakage.

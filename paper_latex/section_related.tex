@@ -1,0 +1,13 @@
+\section{Related Work}
+
+\subsection{Federated Learning and Client Selection}
+FedAvg and its variants have been widely studied. Random selection ignores client heterogeneity, while biased selection strategies aim to improve convergence.
+
+\subsection{Contribution-Based Methods}
+Gradient-based methods use gradient norms as importance indicators. Power of Choice selects clients based on local loss values. Shapley value methods provide fair contribution assessment but lack integration with resource constraints.
+
+\subsection{Resource-Aware Federated Learning}
+Energy-constrained federated learning considers battery-powered devices. Channel-aware scheduling optimizes communication efficiency. Our work combines contribution assessment with long-term energy sustainability.
+
+\subsection{Privacy-Preserving Federated Learning}
+Privacy-preserving mechanisms in federated learning range from differential privacy (DP), which adds calibrated noise to gradients, to cryptographic approaches such as secure multi-party computation (SMPC) and homomorphic encryption (HE). While DP provides formal information-theoretic guarantees, it inevitably degrades model accuracy. Cryptographic methods preserve exact gradient values but incur computational overhead. We adopt AES-256-GCM authenticated encryption at the transmission layer, which provides confidentiality and integrity against honest-but-curious servers and external eavesdroppers without any accuracy loss, offering a practical trade-off between security and utility.

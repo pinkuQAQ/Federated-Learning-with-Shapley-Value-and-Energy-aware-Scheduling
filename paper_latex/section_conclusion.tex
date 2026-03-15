@@ -1,0 +1,37 @@
+\section{Conclusion}
+
+This paper presents a Shapley value and energy-aware dual scheduling mechanism for federated learning with secure gradient transmission. Our approach addresses critical challenges in heterogeneous federated learning environments: accurate client contribution assessment, long-term energy sustainability, and gradient confidentiality.
+
+\subsection{Main Contributions}
+
+We make the following key contributions:
+
+\textbf{(1) Shapley-based Contribution Assessment:} We employ Shapley values to quantify each client's marginal contribution to the global model, providing a more accurate measure than gradient norms or local loss values. The MC-Shapley approximation with exponential smoothing enables efficient computation and stable long-term estimation in non-IID scenarios.
+
+\textbf{(2) Energy Sustainability Modeling:} Unlike prior works focusing on instantaneous energy consumption, we model cumulative residual energy with threshold constraints, ensuring long-term sustainability. The wireless channel-based energy model ($E = \sigma^2/|h|^2$) captures realistic communication costs.
+
+\textbf{(3) Lyapunov Dynamic Optimization:} Our Lyapunov-inspired weight adjustment mechanism adaptively balances model accuracy and energy efficiency without offline parameter tuning. The composite scoring function derived from drift-plus-penalty provides theoretical interpretability and practical efficiency.
+
+\textbf{(4) AES-256-GCM Secure Gradient Transmission:} We integrate AES-256-GCM authenticated encryption to protect gradient updates during transmission under an honest-but-curious server threat model. Unlike differential privacy, this approach introduces zero accuracy degradation while providing cryptographic confidentiality and integrity guarantees.
+
+\textbf{(5) Comprehensive Evaluation:} Extensive experiments on CIFAR-10 with 100 clients under extreme non-IID conditions ($\alpha=0.1$) demonstrate superior performance compared to random selection and Power of Choice baselines.
+
+\subsection{Limitations and Future Work}
+
+While our method shows promising results, several limitations warrant future investigation:
+
+\textbf{(1) Shapley Computation Overhead:} Although MC-Shapley reduces complexity from $O(2^K)$ to $O(K \times M)$, computing Shapley values still adds overhead compared to gradient-free methods. Future work could explore more efficient approximations or amortized computation across rounds.
+
+\textbf{(2) Energy Model Simplification:} Our energy model focuses on communication energy with Rayleigh fading channels. Incorporating more realistic channel models (e.g., path loss, shadowing) and heterogeneous computation costs would enhance practical applicability.
+
+\textbf{(3) Security Model Extension:} AES-256-GCM under the honest-but-curious assumption does not protect against a malicious server. Future work could explore multi-key homomorphic encryption or secure multi-party computation to provide stronger guarantees while preserving Shapley computation capability.
+
+\textbf{(4) Heterogeneous Device Capabilities:} We assume homogeneous computational capabilities. Extending the framework to handle stragglers and varying computation speeds is an important direction.
+
+\textbf{(5) Theoretical Convergence Guarantees:} While we provide a convergence sketch, rigorous analysis of the convergence rate under non-IID data with dynamic client selection remains open.
+
+Future research directions include: (1) integrating our mechanism with asynchronous federated learning, (2) extending to cross-silo federated learning with institutional clients, (3) combining with model compression techniques for communication efficiency, and (4) exploring fairness-aware extensions to balance contribution and participation equity.
+
+\subsection{Concluding Remarks}
+
+Our work demonstrates that intelligent client selection combining contribution assessment, energy awareness, and secure transmission can significantly improve federated learning performance in resource-constrained heterogeneous environments. The proposed dual scheduling mechanism provides a practical and theoretically grounded solution for sustainable and secure federated learning at scale.

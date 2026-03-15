@@ -1,0 +1,28 @@
+.DS_Store
+
+# 数据集（体积大，不上传）
+data/
+
+# 实验结果（pkl文件和图片）
+save/
+
+# TensorBoard 日志
+logs/
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# 虚拟环境
+venv/
+env/
+.env/
+
+# IDE
+.idea/
+.vscode/
+
+# 系统文件
+Thumbs.db

@@ -1,0 +1,49 @@
+% IEEE Journal Paper Template
+\documentclass[journal]{IEEEtran}
+
+% Packages
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{graphicx}
+\usepackage{cite}
+\usepackage{url}
+
+% Document starts
+\begin{document}
+
+\title{Shapley Value and Energy-Aware Dual Scheduling for Federated Learning with Secure Gradient Transmission}
+
+\author{Author Names Here
+\thanks{Manuscript received XXX; revised XXX.}}
+
+\maketitle
+
+\begin{abstract}
+Federated learning (FL) enables collaborative model training across distributed edge devices without sharing raw data. However, existing client selection mechanisms face challenges in heterogeneous environments: non-IID data distribution, limited energy resources, and insufficient quantification of individual client contributions. While recent works explore gradient-based and channel-aware scheduling for over-the-air computation, they focus on instantaneous metrics and short-term optimization, overlooking long-term sustainability and accurate marginal contribution assessment.
+
+This paper proposes a Shapley value and energy-aware dual scheduling mechanism for federated learning with secure gradient transmission. We employ Shapley values to quantify each client's marginal contribution using an MC-Shapley approximation (Monte Carlo permutation sampling) with exponential smoothing for dynamic adaptation in non-IID scenarios. Energy consumption is modeled through wireless channel conditions ($E = \sigma^2/|h|^2$) with cumulative residual energy tracking. A Lyapunov optimization framework dynamically adjusts weights between Shapley values and energy scores. Gradient updates are protected during transmission using AES-256-GCM authenticated encryption, ensuring confidentiality and integrity under an honest-but-curious server threat model without degrading model accuracy.
+
+Extensive simulations on CIFAR-10 with 100 clients demonstrate that our mechanism achieves higher test accuracy and faster convergence compared to random selection and Power of Choice baselines under highly non-IID data distribution (Dirichlet $\alpha=0.1$), while maintaining energy efficiency and secure gradient transmission.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Federated learning, client selection, Shapley value, energy-aware scheduling, gradient encryption, AES-256-GCM, non-IID data, Lyapunov optimization
+\end{IEEEkeywords}
+
+% Sections will be included here
+\input{section_intro}
+\input{section_related}
+\input{section_system}
+\input{section_problem}
+\input{section_method}
+\input{section_analysis}
+\input{section_experiments}
+\input{section_experiments_results}
+\input{section_conclusion}
+
+% Bibliography temporarily commented out until citations are added
+% \bibliographystyle{IEEEtran}
+% \bibliography{references}
+
+\end{document}
