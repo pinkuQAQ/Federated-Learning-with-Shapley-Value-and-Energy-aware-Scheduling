@@ -344,6 +344,8 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         method_suffix = f"_{args.selection_method}"
         if args.use_energy:
             method_suffix += "_Energy"
+    if args.use_fedprox:
+        method_suffix += "_FedProx"
 
     file_name = f'{exp_folder}/{args.dataset}_{args.model}_{args.epochs}_' \
                 f'C[{num_selected}]_iid[{1 if args.iid else 0}]_E[{args.local_ep}]_' \
