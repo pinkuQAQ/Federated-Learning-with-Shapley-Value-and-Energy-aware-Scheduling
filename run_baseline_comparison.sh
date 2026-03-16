@@ -5,8 +5,8 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=16G
 #SBATCH --time=48:00:00
-#SBATCH --output=../logs/slurm_%j.out
-#SBATCH --error=../logs/slurm_%j.err
+#SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_%j.out
+#SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_%j.err
 
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
@@ -15,14 +15,16 @@ echo "Start: $(date)"
 echo "========================================"
 
 # 激活conda环境
-source activate flsv
+source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
+conda activate flsv
+export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
 
 # 切换到src目录
-cd "$(dirname "$0")/src"
+cd /data/home/zhaozhanshan/FLSV/src
 
 # 创建日志目录
-mkdir -p ../logs
-mkdir -p ../save
+mkdir -p /data/home/zhaozhanshan/FLSV/logs
+mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 # 共享参数
 DATASET=cifar
@@ -30,7 +32,7 @@ MODEL=cnn
 EPOCHS=100
 NUM_USERS=100
 NUM_SELECTED=10
-LOCAL_EP=2
+LOCAL_EP=5
 LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.1

@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 
 # ============= 配置参数 =============
-SAVE_DIR = '../save/crypto_15202603_1856'  # 修改此路径以指定要分析的文件夹
+SAVE_DIR = '../save/baseline_cmp_20260315_235050'  # 修改此路径以指定要分析的文件夹
 OUTPUT_DIR = '../save'  # 输出图表保存路径
 # ===================================
 
@@ -120,17 +120,17 @@ def plot_comparison_with_smoothing(save_dir=SAVE_DIR, output_path=None):
             filename = os.path.basename(pkl_file)
             args = data.get('args', {})
 
-            if 'random' in filename.lower():
-                name = 'Random'
+            if args.get('use_lyapunov') and args.get('use_shapley'):
+                name = 'Ours'
+            elif 'fedprox' in filename.lower() or args.get('use_fedprox'):
+                name = 'FedProx'
+            elif 'ucb' in filename.lower() or args.get('selection_method') == 'ucb':
+                name = 'UCB1'
             elif 'poc' in filename.lower() or args.get('selection_method') == 'poc':
                 candidate_size = args.get('poc_candidate_size', '')
-                name = f'PoC (d={candidate_size})' if candidate_size else 'Power of Choice'
-            elif args.get('use_energy') and args.get('use_privacy'):
-                name = 'Triple Scheduling'
-            elif args.get('use_energy'):
-                name = 'Dual Scheduling'
-            elif args.get('use_shapley'):
-                name = 'Pure Shapley'
+                name = f'PoC (d={candidate_size})' if candidate_size else 'PoC'
+            elif 'random' in filename.lower() or args.get('selection_method') == 'random':
+                name = 'FedAvg'
             else:
                 name = filename.replace('.pkl', '')
 
@@ -253,7 +253,7 @@ def plot_comparison_with_smoothing(save_dir=SAVE_DIR, output_path=None):
 
 def plot_comprehensive_metrics(save_dir=SAVE_DIR, output_path=None):
     """
-    绘制综合指标：准确率和收敛速度对比（Ours vs FedAvg）
+    绘制综合指标：准确率和收敛速度对比（所有方法）
     """
     if output_path is None:
         output_path = os.path.join(OUTPUT_DIR, 'comprehensive_metrics.png')
@@ -277,10 +277,16 @@ def plot_comprehensive_metrics(save_dir=SAVE_DIR, output_path=None):
             filename = pkl_file.name
             args = data.get('args', {})
 
-            if 'random' in filename.lower() or args.get('selection_method') == 'random':
-                name = 'FedAvg'
-            elif args.get('use_lyapunov'):
+            if args.get('use_lyapunov') and args.get('use_shapley'):
                 name = 'Ours'
+            elif args.get('use_fedprox'):
+                name = 'FedProx'
+            elif 'ucb' in filename.lower() or args.get('selection_method') == 'ucb':
+                name = 'UCB1'
+            elif 'poc' in filename.lower() or args.get('selection_method') == 'poc':
+                name = 'PoC'
+            elif 'random' in filename.lower() and not args.get('use_fedprox'):
+                name = 'FedAvg'
             else:
                 continue
 
@@ -293,12 +299,20 @@ def plot_comprehensive_metrics(save_dir=SAVE_DIR, output_path=None):
         print("错误: 未找到实验结果")
         return
 
+    # 颜色映射
+    colors = {
+        'Ours': '#2ca02c',
+        'FedAvg': '#ff7f0e',
+        'PoC': '#1f77b4',
+        'UCB1': '#9467bd',
+        'FedProx': '#d62728'
+    }
+
     # 创建2个子图
-    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    fig, axes = plt.subplots(1, 2, figsize=(14, 5))
 
     # 1. 收敛曲线对比
     ax1 = axes[0]
-    colors = {'FedAvg': '#ff7f0e', 'Ours': '#2ca02c'}
     for name, data in results.items():
         acc_history = data['test_accuracy']
         rounds = range(1, len(acc_history) + 1)
