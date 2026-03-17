@@ -32,7 +32,7 @@ MODEL=cnn
 EPOCHS=100
 NUM_USERS=100
 NUM_SELECTED=10
-LOCAL_EP=5
+LOCAL_EP=2
 LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.1
@@ -48,6 +48,7 @@ python federated_main.py \
     --dirichlet_alpha $DIRICHLET_ALPHA --seed $SEED \
     --shapley_update_method mean \
     --shapley_alpha 0.5 \
+    --shapley_max_iter 20 \
     --use_energy \
     --sigma_squared 1.0 \
     --initial_energy 500.0 \
