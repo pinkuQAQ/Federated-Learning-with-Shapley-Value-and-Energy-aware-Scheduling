@@ -13,7 +13,7 @@ from pathlib import Path
 import sys
 
 # ============= 配置参数 =============
-SAVE_DIR = '../save/baseline_cmp_20260315_235050'  # 修改此路径以指定要分析的文件夹
+SAVE_DIR = '../save/baseline_cmp_20260317'  # 修改此路径以指定要分析的文件夹
 OUTPUT_DIR = '../save'  # 输出图表保存路径
 # ===================================
 
