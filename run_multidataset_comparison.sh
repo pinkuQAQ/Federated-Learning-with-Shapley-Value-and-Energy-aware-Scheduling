@@ -81,7 +81,7 @@ for DATASET in "${DATASETS[@]}"; do
             --output_folder $OUTPUT_FOLDER
 
         COUNT=$((COUNT + 1))
-        echo "[${COUNT}/${TOTAL}] UCB (${DATASET}, alpha=${ALPHA})...")
+        echo "[${COUNT}/${TOTAL}] UCB (${DATASET}, alpha=${ALPHA})..."
         python federated_main.py \
             --dataset $DATASET --model $MODEL --epochs $EPOCHS \
             --num_users $NUM_USERS --num_selected $NUM_SELECTED \
