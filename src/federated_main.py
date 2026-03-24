@@ -35,6 +35,9 @@ from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
 from crypto_utils import CryptoManager
 
+# 训练/验证/测试数据划分比例（每个客户端的本地数据中，前80%训练，中间10%验证，后10%测试）
+TRAIN_SPLIT_RATIO = 0.8
+
 
 def build_model(args, train_dataset):
     """构建模型并返回模型实例和模型类"""
@@ -77,7 +80,7 @@ def evaluate_poc_candidates(args, global_model, train_dataset, user_groups,
     with torch.no_grad():
         for idx in candidates:
             idxs = list(user_groups[idx])
-            idxs_train = idxs[:int(0.8 * len(idxs))]
+            idxs_train = idxs[:int(TRAIN_SPLIT_RATIO * len(idxs))]
             if len(idxs_train) == 0:
                 candidate_losses[idx] = 1.0
                 continue
@@ -103,7 +106,7 @@ def _get_client_data_sizes(user_groups, num_users):
     """获取所有客户端的训练数据量"""
     sizes = np.zeros(num_users)
     for i in range(num_users):
-        sizes[i] = int(len(user_groups[i]) * 0.8)
+        sizes[i] = int(len(user_groups[i]) * TRAIN_SPLIT_RATIO)
     return sizes
 
 
@@ -248,7 +251,8 @@ def _select_shapley_only(args, epoch, num_selected, initial_rounds,
 
 def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
                           round_client_models, global_model, val_data_loader,
-                          user_groups, client_participation_counts):
+                          user_groups, client_participation_counts,
+                          shapley_time_history=None):
     """计算并更新Shapley值，同时清理旧数据"""
     if not args.use_shapley or epoch < 1:
         return
@@ -271,7 +275,7 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
         if client_id in prev_models:
             client_model_list.append(prev_models[client_id])
             client_id_list.append(client_id)
-            data_size = len(user_groups[client_id]) * 0.8
+            data_size = len(user_groups[client_id]) * TRAIN_SPLIT_RATIO
             client_data_size_list.append(int(data_size))
 
     if len(client_model_list) == 0:
@@ -280,6 +284,7 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
     print(f"  [Shapley] 计算轮次 {epoch} 的Shapley值（{len(client_id_list)}个客户端）...")
 
     try:
+        _t0 = time.time()
         round_shapley = shapley_calculator.compute_with_history(
             previous_model=prev_round_data['previous_global'],
             client_models=client_model_list,
@@ -288,6 +293,9 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
             client_ids=client_id_list,
             client_data_sizes=client_data_size_list
         )
+        _shapley_elapsed = time.time() - _t0
+        if shapley_time_history is not None:
+            shapley_time_history.append({'round': epoch, 'time_s': _shapley_elapsed})
 
         updated_count = 0
         for i, client_id in enumerate(client_id_list):
@@ -344,6 +352,10 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         method_suffix = f"_{args.selection_method}"
         if args.use_energy:
             method_suffix += "_Energy"
+    if args.use_lyapunov:
+        method_suffix += "_Lyapunov"
+    if getattr(args, 'use_crypto', False):
+        method_suffix += "_Crypto"
     if args.use_fedprox:
         method_suffix += "_FedProx"
 
@@ -366,6 +378,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             'shapley_values': shapley_values,
             'client_participation_counts': client_participation_counts,
             'client_last_round': client_last_round,
+            'shapley_time_history': shapley_time_history,
         })
 
     if args.use_energy and energy_manager is not None:
@@ -381,6 +394,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         save_data.update({
             'lyapunov_statistics': lyap_stats,
             'lyapunov_history': lyapunov_optimizer.lyapunov_history,
+            'queue_history': lyapunov_optimizer.queue_history,
         })
 
     if args.use_crypto and crypto_manager is not None:
@@ -530,7 +544,7 @@ if __name__ == '__main__':
         for uid in range(args.num_users):
             client_idxs = list(user_groups[uid])
             # 从每个客户端取最后10%作为SV验证数据（与train_val_test的划分一致）
-            val_start = int(0.8 * len(client_idxs))
+            val_start = int(TRAIN_SPLIT_RATIO * len(client_idxs))
             val_end = int(0.9 * len(client_idxs))
             sv_val_indices.extend(client_idxs[val_start:val_end])
         # 随机采样最多1000个样本，加快SV计算
@@ -643,6 +657,7 @@ if __name__ == '__main__':
     train_loss, train_accuracy = [], []
     print_every = 2
     test_accuracies = []
+    shapley_time_history = []   # 每轮 Shapley 计算耗时
 
     # PoC评估用的criterion
     poc_criterion = torch.nn.CrossEntropyLoss().to(device)
@@ -779,7 +794,7 @@ if __name__ == '__main__':
         # ============= 聚合全局权重 =============
         client_data_sizes = []
         for idx in idxs_users:
-            data_size = len(user_groups[idx]) * 0.8
+            data_size = len(user_groups[idx]) * TRAIN_SPLIT_RATIO
             client_data_sizes.append(int(data_size))
 
         global_weights = average_weights(local_weights, client_data_sizes)
@@ -797,7 +812,8 @@ if __name__ == '__main__':
             update_shapley_values(
                 args, epoch, shapley_values, shapley_calculator,
                 round_client_models, global_model, val_data_loader,
-                user_groups, client_participation_counts
+                user_groups, client_participation_counts,
+                shapley_time_history=shapley_time_history
             )
 
         loss_avg = sum(local_losses) / len(local_losses)
@@ -822,6 +838,10 @@ if __name__ == '__main__':
         # 每轮都记录测试集准确率
         test_acc, test_loss = test_inference(args, global_model, test_dataset, device=device)
         test_accuracies.append(test_acc)
+
+        # 记录本轮 crypto 轮次（用于计算每轮平均加解密耗时）
+        if args.use_crypto and crypto_manager is not None:
+            crypto_manager.rounds_processed += 1
 
         if (epoch + 1) % print_every == 0:
             print('Test Accuracy: {:.2f}%'.format(100 * test_acc))

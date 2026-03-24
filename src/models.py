@@ -32,8 +32,6 @@ class CNNMnist(nn.Module):
         self.fc1 = nn.Linear(320, 50)
         self.fc2 = nn.Linear(50, args.num_classes)
         self.dropout = nn.Dropout(0.5)
-        self.bn1 = nn.BatchNorm2d(6)
-        self.bn2 = nn.BatchNorm2d(16)
 
     def forward(self, x):
         x = F.relu(F.max_pool2d(self.conv1(x), 2))

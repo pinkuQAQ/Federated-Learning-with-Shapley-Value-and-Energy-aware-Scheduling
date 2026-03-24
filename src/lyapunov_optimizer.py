@@ -93,8 +93,13 @@ class LyapunovTripleScheduler:
 
     def compute_scores(self, shapley_values: np.ndarray, energy_consumed: np.ndarray) -> np.ndarray:
         """
-        计算客户端得分（用于选择）
-        Score = V * SV - Q * Energy_consumed
+        计算客户端得分（用于选择）——标准 Lyapunov drift-plus-penalty
+
+        Score_n = V · φ̂_n - Q_n · Ê_n
+
+        注意：Q_n 不做归一化，让虚拟队列自然增长以平衡 V·SV 项。
+        这是 Lyapunov 优化的核心机制：当能量约束持续违反时，Q 增大，
+        最终超过 V·SV，自动将选择转向低能耗客户端。
 
         Args:
             shapley_values: Shapley值
@@ -104,16 +109,22 @@ class LyapunovTripleScheduler:
             scores: 每个客户端的得分（越高越好）
         """
         # 归一化Shapley值到[0,1]
-        sv_norm = (shapley_values - shapley_values.min()) / (shapley_values.max() - shapley_values.min() + 1e-10)
+        sv_range = shapley_values.max() - shapley_values.min()
+        if sv_range > 1e-10:
+            sv_norm = (shapley_values - shapley_values.min()) / sv_range
+        else:
+            sv_norm = np.ones_like(shapley_values)
 
-        # 归一化能量消耗
-        energy_norm = energy_consumed / (energy_consumed.max() + 1e-10)
+        # 归一化能量消耗到[0,1]
+        energy_max = energy_consumed.max()
+        if energy_max > 1e-10:
+            energy_norm = energy_consumed / energy_max
+        else:
+            energy_norm = np.zeros_like(energy_consumed)
 
-        # 归一化虚拟队列到[0,1]，防止Q_n无限增长后淹没SV项
-        q_norm = self.energy_queue / (self.energy_queue.max() + 1e-10)
-
-        # 计算得分：V * SV - Q_norm * Energy
-        scores = self.V * sv_norm - q_norm * energy_norm
+        # 标准 Lyapunov 得分：V * SV_norm - Q * E_norm
+        # Q 不归一化，使其能够随约束违反自然增长，最终压过 V·SV 项
+        scores = self.V * sv_norm - self.energy_queue * energy_norm
 
         return scores
 

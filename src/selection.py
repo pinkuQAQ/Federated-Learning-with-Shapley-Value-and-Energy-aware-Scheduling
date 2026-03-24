@@ -117,7 +117,8 @@ def energy_aware_selection(shapley_values: np.ndarray,
     if sv_max > sv_min:
         normalized_sv = (shapley_values - sv_min) / (sv_max - sv_min)
     else:
-        normalized_sv = np.ones_like(shapley_values) * 0.5
+        # 所有SV相等 → 所有客户端贡献相同 → 选择由能量决定
+        normalized_sv = np.ones_like(shapley_values)
 
     # 计算综合得分
     composite_scores = (shapley_weight * normalized_sv +

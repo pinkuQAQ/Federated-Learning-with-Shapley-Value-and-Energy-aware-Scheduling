@@ -8,6 +8,7 @@
 """
 
 import pickle
+import time
 from Crypto.Cipher import AES
 from Crypto.Random import get_random_bytes
 
@@ -22,6 +23,8 @@ class ClientCrypto:
         self.decrypt_count = 0
         self.total_plaintext_bytes = 0
         self.total_ciphertext_bytes = 0
+        self.total_encrypt_time = 0.0   # 累计加密耗时（秒）
+        self.total_decrypt_time = 0.0   # 累计解密耗时（秒）
 
     def encrypt_weights(self, weights_dict):
         """
@@ -34,8 +37,10 @@ class ClientCrypto:
         plaintext = pickle.dumps(weights_dict)
         self.total_plaintext_bytes += len(plaintext)
 
+        t0 = time.perf_counter()
         cipher = AES.new(self.session_key, AES.MODE_GCM)
         ciphertext, tag = cipher.encrypt_and_digest(plaintext)
+        self.total_encrypt_time += time.perf_counter() - t0
 
         self.total_ciphertext_bytes += len(ciphertext)
         self.encrypt_count += 1
@@ -58,6 +63,7 @@ class ClientCrypto:
         Returns:
             dict: 模型权重字典（调用方必须在用完后 del）
         """
+        t0 = time.perf_counter()
         cipher = AES.new(
             self.session_key,
             AES.MODE_GCM,
@@ -68,6 +74,8 @@ class ClientCrypto:
             encrypted_package['ciphertext'],
             encrypted_package['tag']
         )
+        self.total_decrypt_time += time.perf_counter() - t0
+
         weights = pickle.loads(plaintext)
         del plaintext   # 立即销毁反序列化前的字节串
 
@@ -107,6 +115,9 @@ class CryptoManager:
         total_plain = sum(c.total_plaintext_bytes for c in self.clients.values())
         total_cipher = sum(c.total_ciphertext_bytes for c in self.clients.values())
         total_enc = sum(c.encrypt_count for c in self.clients.values())
+        total_enc_time = sum(c.total_encrypt_time for c in self.clients.values())
+        total_dec_time = sum(c.total_decrypt_time for c in self.clients.values())
+        rounds = self.rounds_processed if self.rounds_processed > 0 else 1
 
         return {
             'algorithm': 'AES-256-GCM',
@@ -116,6 +127,9 @@ class CryptoManager:
             'total_plaintext_KB': total_plain / 1024,
             'total_ciphertext_KB': total_cipher / 1024,
             'overhead_ratio': total_cipher / total_plain if total_plain > 0 else 0,
+            'avg_encrypt_ms_per_client': total_enc_time / total_enc * 1000 if total_enc > 0 else 0,
+            'avg_decrypt_ms_per_client': total_dec_time / total_enc * 1000 if total_enc > 0 else 0,
+            'avg_total_crypto_ms_per_round': (total_enc_time + total_dec_time) / rounds * 1000,
         }
 
     def print_statistics(self, epoch=None):
@@ -126,3 +140,6 @@ class CryptoManager:
         print(f"{prefix} 传输数据量: {stats['total_plaintext_KB']:.1f} KB (明文) → "
               f"{stats['total_ciphertext_KB']:.1f} KB (密文), "
               f"膨胀率: {stats['overhead_ratio']:.3f}x")
+        print(f"{prefix} 平均加密耗时: {stats['avg_encrypt_ms_per_client']:.3f} ms/client, "
+              f"平均解密耗时: {stats['avg_decrypt_ms_per_client']:.3f} ms/client")
+        print(f"{prefix} 每轮加解密总耗时: {stats['avg_total_crypto_ms_per_round']:.3f} ms/round")

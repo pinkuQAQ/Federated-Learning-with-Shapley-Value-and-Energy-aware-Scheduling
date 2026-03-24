@@ -6,6 +6,7 @@
 shapley.py - GTG-Shapley值计算模块
 """
 
+import logging
 import numpy as np
 import torch
 import torch.nn as nn
@@ -14,6 +15,8 @@ import random
 import time
 from typing import List, Dict, Tuple
 from torch.utils.data import DataLoader
+
+logger = logging.getLogger(__name__)
 
 
 class MCShapley:
@@ -189,8 +192,8 @@ class MCShapley:
         if len(client_ids) != M:
             raise ValueError(f"client_ids长度({len(client_ids)})与client_models长度({M})不匹配")
 
-        print(f"\n[Shapley] 开始计算 {M} 个客户端的Shapley值")
-        print(f"[Shapley] 客户端ID列表: {client_ids}")
+        logger.info(f"开始计算 {M} 个客户端的Shapley值")
+        logger.debug(f"客户端ID列表: {client_ids}")
 
         id_to_idx = {client_id: idx for idx, client_id in enumerate(client_ids)}
 
@@ -200,10 +203,10 @@ class MCShapley:
         v0 = self.compute_utility(previous_model, val_data_loader)
         vM = self.compute_utility(current_global_model, val_data_loader)
 
-        print(f"[Shapley] v0={v0:.6f}, vM={vM:.6f}, Δ={vM - v0:.6f}")
+        logger.info(f"v0={v0:.6f}, vM={vM:.6f}, Δ={vM - v0:.6f}")
 
         if abs(vM - v0) < self.epsilon:
-            print(f"[Shapley] 轮间截断触发")
+            logger.info("轮间截断触发")
             return [0.0] * M
 
         shapley_dict = {cid: 0.0 for cid in client_ids}
@@ -212,19 +215,19 @@ class MCShapley:
         start_time = time.time()
 
         for tau in range(self.max_iterations):
-            print(f"\n=== 第{tau + 1}/{self.max_iterations}次迭代 ===")
+            logger.debug(f"第{tau + 1}/{self.max_iterations}次迭代")
 
             permutation = client_ids.copy()
             random.shuffle(permutation)
 
-            print(f"客户端ID排列: {permutation}")
+            logger.debug(f"客户端ID排列: {permutation}")
 
             v_prev = v0
 
             for j in range(1, M + 1):
                 current_client_id = permutation[j - 1]
 
-                print(f"  j={j}: 处理客户端 {current_client_id}")
+                logger.debug(f"  j={j}: 处理客户端 {current_client_id}")
 
                 subset_ids = permutation[:j]
                 subset_indices = [id_to_idx[cid] for cid in subset_ids]
@@ -251,7 +254,7 @@ class MCShapley:
 
                 marginal = v_current - v_prev
 
-                print(f"    边际贡献: {marginal:.6f} 属于客户端 {current_client_id}")
+                logger.debug(f"    边际贡献: {marginal:.6f} 属于客户端 {current_client_id}")
 
                 old_value = shapley_dict[current_client_id]
                 old_count = count_dict[current_client_id]
@@ -263,28 +266,22 @@ class MCShapley:
 
                 count_dict[current_client_id] += 1
 
-                print(f"    客户端{current_client_id}更新: {shapley_dict[current_client_id]:.6f}")
+                logger.debug(f"    客户端{current_client_id}更新: {shapley_dict[current_client_id]:.6f}")
 
                 v_prev = v_current
 
                 if abs(vM - v_current) < self.epsilon:
-                    print(f"    轮内截断触发")
+                    logger.debug("    轮内截断触发")
                     for remaining_id in permutation[j:]:
                         count_dict[remaining_id] += 1
                     break
 
             elapsed = time.time() - start_time
-            print(f"\n迭代{tau + 1}完成，耗时{elapsed:.2f}秒")
-            print(f"当前Shapley值:")
-            for cid in client_ids:
-                print(f"  客户端{cid}: {shapley_dict[cid]:.6f}")
+            logger.debug(f"迭代{tau + 1}完成，耗时{elapsed:.2f}秒")
 
         result = [shapley_dict[cid] for cid in client_ids]
 
-        print(f"\n Shapley计算完成！")
-        print(f"最终结果:")
-        for idx, cid in enumerate(client_ids):
-            print(f"  客户端{cid}: {result[idx]:.6f}")
+        logger.info(f"Shapley计算完成，范围: [{min(result):.6f}, {max(result):.6f}]")
 
         return result
 
@@ -304,9 +301,8 @@ class MCShapley:
                 self.client_history[client_id] = []
             self.client_history[client_id].append(current_val)
 
-            if self.verbose:
-                print(
-                    f"客户端 {client_id}: 当前值={current_val:.6f}, 历史轮数={len(self.client_history[client_id])}")
+            logger.debug(
+                f"客户端 {client_id}: 当前值={current_val:.6f}, 历史轮数={len(self.client_history[client_id])}")
 
         return current_shapley
 
