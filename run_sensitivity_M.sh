@@ -38,10 +38,7 @@ LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.1
 SEED=42
-OUTPUT_FOLDER="sens_M_$(date +%Y%m%d_%H%M%S)"
-
-echo "Output folder: $OUTPUT_FOLDER"
-echo ""
+DATE=$(date +%Y%m%d)
 
 # ============================================
 # M=5  (极少迭代，Shapley 估计最不准确)
@@ -62,7 +59,7 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder $OUTPUT_FOLDER
+    --output_folder sens_M5_$DATE
 echo "[1/5] Done!"
 
 # ============================================
@@ -85,7 +82,7 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder $OUTPUT_FOLDER
+    --output_folder sens_M10_$DATE
 echo "[2/5] Done!"
 
 # ============================================
@@ -108,7 +105,7 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder $OUTPUT_FOLDER
+    --output_folder sens_M20_$DATE
 echo "[3/5] Done!"
 
 # ============================================
@@ -131,7 +128,7 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder $OUTPUT_FOLDER
+    --output_folder sens_M50_$DATE
 echo "[4/5] Done!"
 
 # ============================================
@@ -154,7 +151,7 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder $OUTPUT_FOLDER
+    --output_folder sens_M100_$DATE
 echo "[5/5] Done!"
 
 echo ""
