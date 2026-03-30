@@ -8,6 +8,8 @@
 #SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_sens_M_%j.out
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_sens_M_%j.err
 
+set -euo pipefail
+
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURMD_NODENAME"
@@ -38,7 +40,7 @@ LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.1
 SEED=42
-DATE=$(date +%Y%m%d)
+RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
 # ============================================
 # M=5  (极少迭代，Shapley 估计最不准确)
@@ -59,7 +61,7 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder sens_M5_$DATE
+    --output_folder sens_M5_$RUN_TAG
 echo "[1/5] Done!"
 
 # ============================================
@@ -82,7 +84,7 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder sens_M10_$DATE
+    --output_folder sens_M10_$RUN_TAG
 echo "[2/5] Done!"
 
 # ============================================
@@ -105,7 +107,7 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder sens_M20_$DATE
+    --output_folder sens_M20_$RUN_TAG
 echo "[3/5] Done!"
 
 # ============================================
@@ -128,7 +130,7 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder sens_M50_$DATE
+    --output_folder sens_M50_$RUN_TAG
 echo "[4/5] Done!"
 
 # ============================================
@@ -151,12 +153,17 @@ python federated_main.py \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
     --use_crypto \
-    --output_folder sens_M100_$DATE
+    --output_folder sens_M100_$RUN_TAG
 echo "[5/5] Done!"
 
 echo ""
 echo "========================================"
 echo "Sensitivity analysis for M finished!"
-echo "Results saved to: /data/home/zhaozhanshan/FLSV/save/$OUTPUT_FOLDER"
+echo "Results saved to:"
+echo "/data/home/zhaozhanshan/FLSV/save/sens_M5_$RUN_TAG"
+echo "/data/home/zhaozhanshan/FLSV/save/sens_M10_$RUN_TAG"
+echo "/data/home/zhaozhanshan/FLSV/save/sens_M20_$RUN_TAG"
+echo "/data/home/zhaozhanshan/FLSV/save/sens_M50_$RUN_TAG"
+echo "/data/home/zhaozhanshan/FLSV/save/sens_M100_$RUN_TAG"
 echo "End: $(date)"
 echo "========================================"

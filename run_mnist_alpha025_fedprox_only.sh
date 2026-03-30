@@ -1,27 +1,28 @@
 #!/bin/bash
+#SBATCH --job-name=FLSV_mnist_a025_fp
+#SBATCH --partition=p3
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --time=12:00:00
+#SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_mnist_a025_fedprox_%j.out
+#SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_mnist_a025_fedprox_%j.err
+
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
-SRC_DIR="$REPO_DIR/src"
-LOG_DIR="$REPO_DIR/logs"
-SAVE_DIR="$REPO_DIR/save"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+echo "========================================"
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node: $SLURMD_NODENAME"
+echo "Start: $(date)"
+echo "========================================"
 
-if [[ -n "${CONDA_SH:-}" ]]; then
-    source "$CONDA_SH"
-fi
+source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
+conda activate flsv
+export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
 
-if [[ -n "${CONDA_ENV:-}" ]]; then
-    conda activate "$CONDA_ENV"
-fi
-
-if [[ -n "${LD_PRELOAD_PATH:-}" ]]; then
-    export LD_PRELOAD="$LD_PRELOAD_PATH"
-fi
-
-mkdir -p "$LOG_DIR" "$SAVE_DIR"
-cd "$SRC_DIR"
+cd /data/home/zhaozhanshan/FLSV/src
+mkdir -p /data/home/zhaozhanshan/FLSV/logs
+mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 DATASET=mnist
 MODEL=cnn
@@ -35,13 +36,10 @@ DIRICHLET_ALPHA=0.25
 SEED=42
 OUTPUT_FOLDER="${OUTPUT_FOLDER:-mnist_alpha0.25_$(date +%Y%m%d)}"
 
-echo "========================================"
-echo "Start: $(date)"
 echo "Task: MNIST alpha=0.25 FedProx only"
 echo "Output folder: $OUTPUT_FOLDER"
-echo "========================================"
 
-"$PYTHON_BIN" federated_main.py \
+python federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
@@ -52,4 +50,4 @@ echo "========================================"
     --fedprox_mu 0.01 \
     --output_folder $OUTPUT_FOLDER
 
-echo "Done. Results saved to: $SAVE_DIR/$OUTPUT_FOLDER"
+echo "Done. Results saved to: /data/home/zhaozhanshan/FLSV/save/$OUTPUT_FOLDER"

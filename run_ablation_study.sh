@@ -1,27 +1,28 @@
 #!/bin/bash
+#SBATCH --job-name=FLSV_ablation
+#SBATCH --partition=p3
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=16G
+#SBATCH --time=48:00:00
+#SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_ablation_%j.out
+#SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_ablation_%j.err
+
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
-SRC_DIR="$REPO_DIR/src"
-LOG_DIR="$REPO_DIR/logs"
-SAVE_DIR="$REPO_DIR/save"
-PYTHON_BIN="${PYTHON_BIN:-python}"
+echo "========================================"
+echo "Job ID: $SLURM_JOB_ID"
+echo "Node: $SLURMD_NODENAME"
+echo "Start: $(date)"
+echo "========================================"
 
-if [[ -n "${CONDA_SH:-}" ]]; then
-    source "$CONDA_SH"
-fi
+source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
+conda activate flsv
+export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
 
-if [[ -n "${CONDA_ENV:-}" ]]; then
-    conda activate "$CONDA_ENV"
-fi
-
-if [[ -n "${LD_PRELOAD_PATH:-}" ]]; then
-    export LD_PRELOAD="$LD_PRELOAD_PATH"
-fi
-
-mkdir -p "$LOG_DIR" "$SAVE_DIR"
-cd "$SRC_DIR"
+cd /data/home/zhaozhanshan/FLSV/src
+mkdir -p /data/home/zhaozhanshan/FLSV/logs
+mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 DATASET=cifar
 MODEL=cnn
@@ -35,14 +36,11 @@ DIRICHLET_ALPHA=0.1
 SEED=42
 OUTPUT_FOLDER="${OUTPUT_FOLDER:-ablation_$(date +%Y%m%d_%H%M%S)}"
 
-echo "========================================"
-echo "Start: $(date)"
 echo "Task: ablation rerun"
 echo "Output folder: $OUTPUT_FOLDER"
-echo "========================================"
 
 echo "[1/4] Running Full..."
-"$PYTHON_BIN" federated_main.py \
+python federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
@@ -60,7 +58,7 @@ echo "[1/4] Running Full..."
     --output_folder $OUTPUT_FOLDER
 
 echo "[2/4] Running w/o Crypto..."
-"$PYTHON_BIN" federated_main.py \
+python federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
@@ -77,7 +75,7 @@ echo "[2/4] Running w/o Crypto..."
     --output_folder $OUTPUT_FOLDER
 
 echo "[3/4] Running w/o Lyapunov..."
-"$PYTHON_BIN" federated_main.py \
+python federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
@@ -90,7 +88,7 @@ echo "[3/4] Running w/o Lyapunov..."
     --output_folder $OUTPUT_FOLDER
 
 echo "[4/4] Running w/o SV..."
-"$PYTHON_BIN" federated_main.py \
+python federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
@@ -106,4 +104,4 @@ echo "[4/4] Running w/o SV..."
     --use_crypto \
     --output_folder $OUTPUT_FOLDER
 
-echo "Done. Results saved to: $SAVE_DIR/$OUTPUT_FOLDER"
+echo "Done. Results saved to: /data/home/zhaozhanshan/FLSV/save/$OUTPUT_FOLDER"
