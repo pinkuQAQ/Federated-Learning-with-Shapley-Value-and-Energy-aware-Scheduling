@@ -8,8 +8,6 @@
 #SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_sens_V_%j.out
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_sens_V_%j.err
 
-set -euo pipefail
-
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURMD_NODENAME"

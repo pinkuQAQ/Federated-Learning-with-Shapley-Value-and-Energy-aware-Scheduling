@@ -8,14 +8,13 @@
 #SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_fmnist_a025_%j.out
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_fmnist_a025_%j.err
 
-set -euo pipefail
-
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURMD_NODENAME"
 echo "Start: $(date)"
 echo "========================================"
 
+# 激活conda环境
 source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
 conda activate flsv
 export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
