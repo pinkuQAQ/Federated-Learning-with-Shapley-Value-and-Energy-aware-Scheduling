@@ -1,28 +1,36 @@
 #!/bin/bash
-#SBATCH --job-name=FLSV_mnist_a025
-#SBATCH --partition=p3
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=12:00:00
-#SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_mnist_a025_%j.out
-#SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_mnist_a025_%j.err
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${REPO_DIR:-$SCRIPT_DIR}"
+SRC_DIR="$REPO_DIR/src"
+LOG_DIR="$REPO_DIR/logs"
+SAVE_DIR="$REPO_DIR/save"
+PYTHON_BIN="${PYTHON_BIN:-python}"
+
+if [[ -n "${CONDA_SH:-}" ]]; then
+    # Optional: export CONDA_SH=/path/to/conda.sh before running.
+    source "$CONDA_SH"
+fi
+
+if [[ -n "${CONDA_ENV:-}" ]]; then
+    # Optional: export CONDA_ENV=flsv before running.
+    conda activate "$CONDA_ENV"
+fi
+
+if [[ -n "${LD_PRELOAD_PATH:-}" ]]; then
+    export LD_PRELOAD="$LD_PRELOAD_PATH"
+fi
 
 echo "========================================"
-echo "Job ID: $SLURM_JOB_ID"
-echo "Node: $SLURMD_NODENAME"
 echo "Start: $(date)"
-echo "Task: MNIST alpha=0.25 (Table 2 missing cell)"
+echo "Task: MNIST alpha=0.25"
+echo "Repo: $REPO_DIR"
+echo "Python: $PYTHON_BIN"
 echo "========================================"
 
-source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
-conda activate flsv
-export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
-
-cd /data/home/zhaozhanshan/FLSV/src
-
-mkdir -p /data/home/zhaozhanshan/FLSV/logs
-mkdir -p /data/home/zhaozhanshan/FLSV/save
+mkdir -p "$LOG_DIR" "$SAVE_DIR"
+cd "$SRC_DIR"
 
 DATASET=mnist
 MODEL=cnn
@@ -40,7 +48,7 @@ OUTPUT_FOLDER="mnist_alpha0.25_$(date +%Y%m%d)"
 # [1/5] Ours
 # ============================================
 echo "[1/5] Running Ours..."
-python federated_main.py \
+"$PYTHON_BIN" federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
@@ -61,7 +69,7 @@ echo "[1/5] Done!"
 # [2/5] FedAvg
 # ============================================
 echo "[2/5] Running FedAvg..."
-python federated_main.py \
+"$PYTHON_BIN" federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
@@ -75,7 +83,7 @@ echo "[2/5] Done!"
 # [3/5] PoC
 # ============================================
 echo "[3/5] Running PoC..."
-python federated_main.py \
+"$PYTHON_BIN" federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
@@ -89,7 +97,7 @@ echo "[3/5] Done!"
 # [4/5] UCB
 # ============================================
 echo "[4/5] Running UCB..."
-python federated_main.py \
+"$PYTHON_BIN" federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
@@ -103,20 +111,20 @@ echo "[4/5] Done!"
 # [5/5] FedProx
 # ============================================
 echo "[5/5] Running FedProx..."
-python federated_main.py \
+"$PYTHON_BIN" federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
     --dirichlet_alpha $DIRICHLET_ALPHA --seed $SEED \
     --no_shapley \
     --selection_method random \
-    --fedprox \
+    --use_fedprox \
     --fedprox_mu 0.01 \
     --output_folder $OUTPUT_FOLDER
 echo "[5/5] Done!"
 
 echo ""
 echo "========================================"
-echo "All done! Results saved to: /data/home/zhaozhanshan/FLSV/save/$OUTPUT_FOLDER"
+echo "All done! Results saved to: $SAVE_DIR/$OUTPUT_FOLDER"
 echo "End: $(date)"
 echo "========================================"

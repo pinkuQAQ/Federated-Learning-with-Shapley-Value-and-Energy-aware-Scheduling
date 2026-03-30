@@ -120,6 +120,13 @@ def select_clients(args, epoch, num_selected, initial_rounds,
 
     # ---- 非Shapley路径 ----
     if not args.use_shapley:
+        if (args.selection_method == 'random' and args.use_energy and args.use_lyapunov and
+                energy_manager is not None and lyapunov_optimizer is not None):
+            return _select_lyapunov_without_shapley(
+                args, epoch, num_selected, available_clients,
+                energy_manager, lyapunov_optimizer, user_groups,
+                client_participation_counts
+            )
         if args.selection_method == 'ucb':
             return ucb_selection(
                 num_clients=args.num_users,
@@ -246,6 +253,18 @@ def _select_shapley_only(args, epoch, num_selected, initial_rounds,
         participation_counts=client_participation_counts,
         current_round=epoch,
         initial_rounds=initial_rounds,
+    )
+
+
+def _select_lyapunov_without_shapley(args, epoch, num_selected, available_clients,
+                                     energy_manager, lyapunov_optimizer,
+                                     user_groups, client_participation_counts):
+    """Lyapunov-only path used by the w/o SV ablation."""
+    zero_shapley = np.zeros(args.num_users)
+    return _select_lyapunov(
+        args, epoch, num_selected, zero_shapley,
+        client_participation_counts, available_clients,
+        energy_manager, lyapunov_optimizer, user_groups
     )
 
 
