@@ -14,10 +14,38 @@ echo "Node: $SLURMD_NODENAME"
 echo "Start: $(date)"
 echo "========================================"
 
-# 激活conda环境
-source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
-conda activate flsv
-export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
+# 激活conda环境（自动探测路径）
+if command -v conda >/dev/null 2>&1; then
+    eval "$(conda shell.bash hook)"
+else
+    for c in \
+        "$HOME/miniconda3/etc/profile.d/conda.sh" \
+        "$HOME/anaconda3/etc/profile.d/conda.sh" \
+        "/data/home/zhaozhanshan/miniconda3/etc/profile.d/conda.sh" \
+        "/data/home/zhaozhanshan/anaconda3/etc/profile.d/conda.sh" \
+        "/opt/conda/etc/profile.d/conda.sh"
+    do
+        if [ -f "$c" ]; then
+            source "$c"
+            break
+        fi
+    done
+fi
+
+if ! command -v conda >/dev/null 2>&1; then
+    echo "ERROR: conda command not found on this node."
+    exit 1
+fi
+
+conda activate flsv || {
+    echo "ERROR: conda env 'flsv' not found."
+    conda info --envs || true
+    exit 1
+}
+
+if [ -f /data/home/zhaozhanshan/lib/libittnotify_stub.so ]; then
+    export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
+fi
 
 cd /data/home/zhaozhanshan/FLSV/src
 mkdir -p /data/home/zhaozhanshan/FLSV/logs
