@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 """Generate Fig. style EMA accuracy curves for ablation and sensitivity studies.
 
 The script reads only completed experiment files under ``save/`` and ignores
@@ -43,7 +43,6 @@ EMA_ALPHA = 0.1
 
 ABLATION_STYLES = {
     "Full": {"color": "#000000", "linestyle": "-", "linewidth": 1.1},
-    "w/o Crypto": {"color": "#1f77b4", "linestyle": "-", "linewidth": 0.95},
     "w/o Lyapunov": {"color": "#ff7f0e", "linestyle": "-", "linewidth": 0.95},
     "w/o SV": {"color": "#d62728", "linestyle": "-", "linewidth": 0.95},
 }
@@ -83,16 +82,13 @@ def identify_ablation_variant(result: dict) -> str:
     args = result.get("args", {})
     use_sv = bool(args.get("use_shapley"))
     use_lyapunov = bool(args.get("use_lyapunov"))
-    use_crypto = bool(args.get("use_crypto"))
     use_energy = bool(args.get("use_energy"))
 
-    if use_sv and use_lyapunov and use_crypto and use_energy:
+    if use_sv and use_lyapunov and use_energy:
         return "Full"
-    if use_sv and use_lyapunov and use_energy and not use_crypto:
-        return "w/o Crypto"
-    if use_sv and use_crypto and not use_lyapunov:
+    if use_sv and not use_lyapunov:
         return "w/o Lyapunov"
-    if not use_sv and use_lyapunov and use_crypto and use_energy:
+    if not use_sv and use_lyapunov and use_energy:
         return "w/o SV"
     raise ValueError(f"Unrecognized ablation configuration: {args}")
 
@@ -129,12 +125,12 @@ def style_axis(ax: plt.Axes, title: str, show_xlabel: bool) -> None:
 
 
 def plot_ablation_panel(ax: plt.Axes, curves: dict[str, list[float]]) -> None:
-    order = ["Full", "w/o Crypto", "w/o Lyapunov", "w/o SV"]
+    order = ["Full", "w/o Lyapunov", "w/o SV"]
     rounds = list(range(1, 101))
     for name in order:
         ax.plot(rounds, exponential_moving_average(curves[name]), label=name, **ABLATION_STYLES[name])
     style_axis(ax, "(a) Ablation Accuracy Comparison", show_xlabel=False)
-    ax.legend(loc="lower right", fontsize=6.5, framealpha=0.86, ncol=2, handlelength=1.5, borderpad=0.30, labelspacing=0.25)
+    ax.legend(loc="lower right", fontsize=6.5, framealpha=0.86, ncol=1, handlelength=1.5, borderpad=0.30, labelspacing=0.25)
 
 
 def plot_parameter_panel(ax: plt.Axes, curves: dict[int, list[float]], prefix: str, title: str, show_xlabel: bool) -> None:

@@ -37,7 +37,10 @@ LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.1
 SEED=42
-OUTPUT_FOLDER="baseline_cmp_$(date +%Y%m%d_%H%M%S)"
+DP_CLIP_NORM=1.0
+DP_NOISE_MULTIPLIER=0.05
+DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
+OUTPUT_FOLDER="baseline_cmp_ldp_$(date +%Y%m%d_%H%M%S)"
 
 echo ""
 echo "[1/5] Running Ours (SV + Energy + Lyapunov)..."
@@ -56,6 +59,7 @@ python federated_main.py \
     --use_lyapunov \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[1/5] Done!"
 
@@ -68,6 +72,7 @@ python federated_main.py \
     --dirichlet_alpha $DIRICHLET_ALPHA --seed $SEED \
     --no_shapley \
     --selection_method random \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[2/5] Done!"
 
@@ -80,6 +85,7 @@ python federated_main.py \
     --dirichlet_alpha $DIRICHLET_ALPHA --seed $SEED \
     --no_shapley \
     --selection_method poc \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[3/5] Done!"
 
@@ -93,6 +99,7 @@ python federated_main.py \
     --no_shapley \
     --selection_method ucb \
     --ucb_c 1.0 \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[4/5] Done!"
 
@@ -107,6 +114,7 @@ python federated_main.py \
     --selection_method random \
     --use_fedprox \
     --fedprox_mu 0.01 \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[5/5] Done!"
 

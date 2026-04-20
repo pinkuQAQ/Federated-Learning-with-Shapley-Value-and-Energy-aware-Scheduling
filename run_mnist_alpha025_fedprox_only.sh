@@ -32,7 +32,10 @@ LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.25
 SEED=42
-OUTPUT_FOLDER="${OUTPUT_FOLDER:-mnist_alpha0.25_$(date +%Y%m%d)}"
+DP_CLIP_NORM=1.0
+DP_NOISE_MULTIPLIER=0.05
+DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
+OUTPUT_FOLDER="${OUTPUT_FOLDER:-mnist_alpha0.25_ldp_$(date +%Y%m%d)}"
 
 echo "Task: MNIST alpha=0.25 FedProx only"
 echo "Output folder: $OUTPUT_FOLDER"
@@ -46,6 +49,7 @@ python federated_main.py \
     --selection_method random \
     --use_fedprox \
     --fedprox_mu 0.01 \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 
 echo "Done. Results saved to: /data/home/zhaozhanshan/FLSV/save/$OUTPUT_FOLDER"

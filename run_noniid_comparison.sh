@@ -31,6 +31,9 @@ LOCAL_EP=2
 LOCAL_BS=32
 LR=0.01
 SEED=42
+DP_CLIP_NORM=1.0
+DP_NOISE_MULTIPLIER=0.05
+DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
 
 # 4个不同的 Dirichlet α 值
 ALPHAS=(0.1 0.25 0.5 1.0)
@@ -39,7 +42,7 @@ TOTAL=$((${#ALPHAS[@]} * 5))
 COUNT=0
 
 for ALPHA in "${ALPHAS[@]}"; do
-    OUTPUT_FOLDER="noniid_cmp_alpha${ALPHA}_$(date +%Y%m%d)"
+    OUTPUT_FOLDER="noniid_cmp_ldp_alpha${ALPHA}_$(date +%Y%m%d)"
 
     echo ""
     echo "========================================"
@@ -57,6 +60,7 @@ for ALPHA in "${ALPHAS[@]}"; do
         --shapley_update_method mean --shapley_alpha 0.5 --shapley_max_iter 20 \
         --use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0 \
         --use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0 \
+        $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 
     COUNT=$((COUNT + 1))
@@ -67,6 +71,7 @@ for ALPHA in "${ALPHAS[@]}"; do
         --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
         --dirichlet_alpha $ALPHA --seed $SEED \
         --no_shapley --selection_method random \
+        $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 
     COUNT=$((COUNT + 1))
@@ -77,6 +82,7 @@ for ALPHA in "${ALPHAS[@]}"; do
         --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
         --dirichlet_alpha $ALPHA --seed $SEED \
         --no_shapley --selection_method poc \
+        $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 
     COUNT=$((COUNT + 1))
@@ -87,6 +93,7 @@ for ALPHA in "${ALPHAS[@]}"; do
         --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
         --dirichlet_alpha $ALPHA --seed $SEED \
         --no_shapley --selection_method ucb --ucb_c 1.0 \
+        $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 
     COUNT=$((COUNT + 1))
@@ -97,6 +104,7 @@ for ALPHA in "${ALPHAS[@]}"; do
         --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
         --dirichlet_alpha $ALPHA --seed $SEED \
         --no_shapley --selection_method random --use_fedprox --fedprox_mu 0.01 \
+        $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 
     echo "Alpha=${ALPHA} done! Results: /data/home/zhaozhanshan/FLSV/save/${OUTPUT_FOLDER}"

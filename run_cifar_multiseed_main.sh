@@ -33,11 +33,14 @@ LOCAL_BS=32
 LR=0.01
 ALPHAS=(0.25 0.5)
 SEEDS=(42 52 62 72 82)
+DP_CLIP_NORM=1.0
+DP_NOISE_MULTIPLIER=0.05
+DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d)}"
 
 for ALPHA in "${ALPHAS[@]}"; do
     for SEED in "${SEEDS[@]}"; do
-        OUTPUT_FOLDER="cifar_ms_alpha${ALPHA}_seed${SEED}_${RUN_TAG}"
+        OUTPUT_FOLDER="cifar_ms_ldp_alpha${ALPHA}_seed${SEED}_${RUN_TAG}"
 
         echo ""
         echo "========================================"
@@ -61,6 +64,7 @@ for ALPHA in "${ALPHAS[@]}"; do
             --use_lyapunov \
             --lyapunov_V 10.0 \
             --energy_budget 5.0 \
+            $DP_ARGS \
             --output_folder $OUTPUT_FOLDER
 
         echo "[2/5] FedAvg"
@@ -71,6 +75,7 @@ for ALPHA in "${ALPHAS[@]}"; do
             --dirichlet_alpha $ALPHA --seed $SEED \
             --no_shapley \
             --selection_method random \
+            $DP_ARGS \
             --output_folder $OUTPUT_FOLDER
 
         echo "[3/5] PoC"
@@ -81,6 +86,7 @@ for ALPHA in "${ALPHAS[@]}"; do
             --dirichlet_alpha $ALPHA --seed $SEED \
             --no_shapley \
             --selection_method poc \
+            $DP_ARGS \
             --output_folder $OUTPUT_FOLDER
 
         echo "[4/5] UCB"
@@ -92,6 +98,7 @@ for ALPHA in "${ALPHAS[@]}"; do
             --no_shapley \
             --selection_method ucb \
             --ucb_c 1.0 \
+            $DP_ARGS \
             --output_folder $OUTPUT_FOLDER
 
         echo "[5/5] FedProx"
@@ -104,6 +111,7 @@ for ALPHA in "${ALPHAS[@]}"; do
             --selection_method random \
             --use_fedprox \
             --fedprox_mu 0.01 \
+            $DP_ARGS \
             --output_folder $OUTPUT_FOLDER
     done
 done

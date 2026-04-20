@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 平滑收敛曲线对比脚本
@@ -378,92 +378,6 @@ def plot_comprehensive_metrics(save_dir=SAVE_DIR, output_path=None):
         print(f"{name:<15} {final_acc:<15.4f} {conv_40:<15} {conv_50:<15}")
 
     print("=" * 60)
-    plt.close()
-
-
-def plot_crypto_overhead(save_dir=SAVE_DIR, output_path=None):
-    """
-    绘制加密开销对比（消融实验用）
-    """
-    if output_path is None:
-        output_path = os.path.join(OUTPUT_DIR, 'crypto_overhead.png')
-
-    print("\n" + "=" * 60)
-    print("生成加密开销可视化")
-    print("=" * 60)
-
-    pkl_files = list(Path(save_dir).glob('*.pkl'))
-    crypto_data, no_crypto_data = None, None
-
-    for pkl_file in pkl_files:
-        try:
-            with open(pkl_file, 'rb') as f:
-                data = pickle.load(f)
-
-            if 'test_accuracy' not in data:
-                continue
-
-            args = data.get('args', {})
-            if args.get('use_crypto') and args.get('use_lyapunov'):
-                crypto_data = data
-                print(f"加载加密实验: {pkl_file.name}")
-            elif not args.get('use_crypto') and args.get('use_lyapunov'):
-                no_crypto_data = data
-                print(f"加载无加密实验: {pkl_file.name}")
-        except Exception as e:
-            print(f"加载失败: {e}")
-
-    if not crypto_data:
-        print("未找到加密实验数据")
-        return
-
-    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
-
-    # 1. 准确率对比
-    ax1 = axes[0]
-    if no_crypto_data:
-        methods = ['No Crypto', 'With Crypto']
-        accs = [no_crypto_data['test_accuracy'][-1], crypto_data['test_accuracy'][-1]]
-        bars = ax1.bar(methods, accs, color=['#99ff99', '#ffcc99'], edgecolor='black', linewidth=1.2)
-        ax1.set_ylabel('Final Accuracy', fontsize=11)
-        ax1.set_title('Accuracy Comparison', fontsize=12, fontweight='bold')
-        ax1.grid(axis='y', alpha=0.3)
-        for bar in bars:
-            h = bar.get_height()
-            ax1.text(bar.get_x() + bar.get_width()/2., h, f'{h:.4f}', ha='center', va='bottom', fontsize=10)
-
-    # 2. 收敛曲线对比
-    ax2 = axes[1]
-    if no_crypto_data:
-        rounds = range(1, len(no_crypto_data['test_accuracy']) + 1)
-        ax2.plot(rounds, no_crypto_data['test_accuracy'], label='No Crypto', linewidth=2, color='#2ca02c')
-        ax2.plot(rounds, crypto_data['test_accuracy'], label='With Crypto', linewidth=2, color='#ff7f0e')
-        ax2.set_xlabel('Training Round', fontsize=11)
-        ax2.set_ylabel('Test Accuracy', fontsize=11)
-        ax2.set_title('Convergence Comparison', fontsize=12, fontweight='bold')
-        ax2.legend(fontsize=10)
-        ax2.grid(True, alpha=0.3)
-
-    plt.suptitle('Encryption (AES-256-GCM) Overhead Analysis', fontsize=14, fontweight='bold')
-    plt.tight_layout()
-
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    plt.savefig(output_path, dpi=300, bbox_inches='tight')
-    print(f"\n加密开销图已保存到: {output_path}")
-
-    if 'crypto_statistics' in crypto_data:
-        stats = crypto_data['crypto_statistics']
-        print("\n" + "=" * 60)
-        print("加密统计信息")
-        print("=" * 60)
-        print(f"算法: {stats.get('algorithm', 'AES-256-GCM')}")
-        print(f"总加密操作: {stats.get('total_encrypt_ops', 0)}")
-        print(f"数据膨胀率: {stats.get('overhead_ratio', 0):.3f}x")
-        if no_crypto_data:
-            acc_loss = (no_crypto_data['test_accuracy'][-1] - crypto_data['test_accuracy'][-1]) * 100
-            print(f"准确率损失: {acc_loss:.2f}%")
-        print("=" * 60)
-
     plt.close()
 
 

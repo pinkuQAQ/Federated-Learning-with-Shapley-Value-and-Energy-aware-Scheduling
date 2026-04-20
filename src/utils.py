@@ -215,4 +215,9 @@ def exp_details(args):
     print(f'    Selection of users  : {args.num_selected}')
     print(f'    Local Batch size   : {args.local_bs}')
     print(f'    Local Epochs       : {args.local_ep}\n')
+    if hasattr(args, 'use_local_dp') and args.use_local_dp:
+        print('    Privacy parameters:')
+        print(f'    Local DP enabled   : {args.use_local_dp}')
+        print(f'    Clip norm C        : {args.dp_clip_norm}')
+        print(f'    Noise multiplier   : {args.dp_noise_multiplier}\n')
     return

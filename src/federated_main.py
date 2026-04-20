@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # Python version: 3.6
 
@@ -33,7 +33,6 @@ from selection import (hybrid_selection, random_selection, round_robin_selection
                        ucb_selection)
 from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
-from crypto_utils import CryptoManager
 
 # 训练/验证/测试数据划分比例（每个客户端的本地数据中，前80%训练，中间10%验证，后10%测试）
 TRAIN_SPLIT_RATIO = 0.8
@@ -108,6 +107,50 @@ def _get_client_data_sizes(user_groups, num_users):
     for i in range(num_users):
         sizes[i] = int(len(user_groups[i]) * TRAIN_SPLIT_RATIO)
     return sizes
+
+
+def _apply_local_dp(global_state, local_state, args):
+    """Clip and perturb a client's model update before upload."""
+    if not args.use_local_dp:
+        return copy.deepcopy(local_state), {
+            'pre_clip_norm': 0.0,
+            'post_clip_norm': 0.0,
+            'clip_factor': 1.0,
+            'noise_std': 0.0,
+        }
+
+    clip_norm = max(float(args.dp_clip_norm), 1e-12)
+    noise_std = float(args.dp_noise_multiplier) * clip_norm
+
+    total_sq_norm = 0.0
+    for key, local_tensor in local_state.items():
+        global_tensor = global_state[key].to(local_tensor.device)
+        if torch.is_floating_point(local_tensor):
+            delta = (local_tensor - global_tensor).float()
+            total_sq_norm += torch.sum(delta * delta).item()
+
+    pre_clip_norm = total_sq_norm ** 0.5
+    clip_factor = min(1.0, clip_norm / (pre_clip_norm + 1e-12)) if pre_clip_norm > 0 else 1.0
+
+    privatized_state = copy.deepcopy(local_state)
+    for key, local_tensor in local_state.items():
+        global_tensor = global_state[key].to(local_tensor.device)
+        if not torch.is_floating_point(local_tensor):
+            privatized_state[key] = local_tensor.clone()
+            continue
+
+        delta = (local_tensor - global_tensor).float()
+        delta = delta * clip_factor
+        noise = torch.randn_like(delta) * noise_std
+        sanitized = global_tensor.float() + delta + noise
+        privatized_state[key] = sanitized.to(local_tensor.dtype)
+
+    return privatized_state, {
+        'pre_clip_norm': pre_clip_norm,
+        'post_clip_norm': pre_clip_norm * clip_factor,
+        'clip_factor': clip_factor,
+        'noise_std': noise_std,
+    }
 
 
 def select_clients(args, epoch, num_selected, initial_rounds,
@@ -357,8 +400,8 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
 def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_accuracy,
                  test_accuracies, test_acc, shapley_values, client_participation_counts,
                  client_last_round, energy_manager, lyapunov_optimizer,
-                 crypto_manager, start_time, sv_sample_size=0,
-                 ucb_rewards=None, ucb_counts=None):
+                 start_time, sv_sample_size=0, ucb_rewards=None, ucb_counts=None,
+                 dp_round_history=None):
     """保存实验结果"""
     os.makedirs(exp_folder, exist_ok=True)
 
@@ -373,10 +416,10 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             method_suffix += "_Energy"
     if args.use_lyapunov:
         method_suffix += "_Lyapunov"
-    if getattr(args, 'use_crypto', False):
-        method_suffix += "_Crypto"
     if args.use_fedprox:
         method_suffix += "_FedProx"
+    if args.use_local_dp:
+        method_suffix += "_LDP"
 
     file_name = f'{exp_folder}/{args.dataset}_{args.model}_{args.epochs}_' \
                 f'C[{num_selected}]_iid[{1 if args.iid else 0}]_E[{args.local_ep}]_' \
@@ -416,15 +459,19 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             'queue_history': lyapunov_optimizer.queue_history,
         })
 
-    if args.use_crypto and crypto_manager is not None:
-        save_data.update({
-            'crypto_statistics': crypto_manager.get_statistics(),
-        })
-
     if args.selection_method == 'ucb' and ucb_rewards is not None:
         save_data.update({
             'ucb_rewards': ucb_rewards,
             'ucb_counts': ucb_counts,
+        })
+
+    if args.use_local_dp:
+        save_data.update({
+            'dp_statistics': {
+                'clip_norm': args.dp_clip_norm,
+                'noise_multiplier': args.dp_noise_multiplier,
+            },
+            'dp_round_history': dp_round_history or [],
         })
 
     try:
@@ -483,11 +530,11 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 else:
                     f.write(f"- Shapley权重: {args.shapley_weight}\n")
                     f.write(f"- 能量权重: {args.energy_weight}\n")
-            f.write(f"\n## 梯度加密\n\n")
-            f.write(f"- 使用AES加密: {args.use_crypto}\n")
-            if args.use_crypto:
-                f.write(f"- 算法: AES-256-GCM\n")
-                f.write(f"- 威胁模型: 诚实但好奇服务器\n")
+            f.write(f"\n## Local Differential Privacy\n\n")
+            f.write(f"- 使用Local DP: {args.use_local_dp}\n")
+            if args.use_local_dp:
+                f.write(f"- 裁剪阈值 C: {args.dp_clip_norm}\n")
+                f.write(f"- 噪声乘子 sigma_dp: {args.dp_noise_multiplier}\n")
             f.write(f"\n## 实验结果\n\n")
             f.write(f"- 最终测试准确率: {test_acc * 100:.2f}%\n")
             f.write(f"- 总运行时间: {time.time() - start_time:.2f}秒\n")
@@ -641,18 +688,6 @@ if __name__ == '__main__':
         prev_selected_clients = []
         prev_energy_consumed = None
 
-    # ============= 对称加密初始化（方案2：AES-256-GCM）=============
-    if args.use_crypto:
-        crypto_manager = CryptoManager(num_clients=args.num_users)
-        print("\n" + "=" * 60)
-        print("启用 AES-256-GCM 梯度加密")
-        print("  威胁模型: 诚实但好奇服务器（honest-but-curious）")
-        print("  密钥管理: 每客户端独立 256-bit 会话密钥")
-        print("  隐私保证: 梯度传输密文化，服务器计算后立即销毁明文")
-        print("=" * 60 + "\n")
-    else:
-        crypto_manager = None
-
     # ============= UCB 状态初始化 =============
     if args.selection_method == 'ucb' and not args.use_shapley:
         ucb_rewards = np.zeros(args.num_users)
@@ -667,7 +702,13 @@ if __name__ == '__main__':
         print(f"启用 FedProx 近端项 (μ={args.fedprox_mu})")
         print("=" * 60 + "\n")
 
-    # ============= 隐私会计初始化 已移除（DP模块已删除）=============
+    # ============= Local DP 初始化 =============
+    if args.use_local_dp:
+        print("\n" + "=" * 60)
+        print("启用客户端 Local DP 上传机制")
+        print(f"裁剪阈值 C: {args.dp_clip_norm}")
+        print(f"噪声乘子 sigma_dp: {args.dp_noise_multiplier}")
+        print("=" * 60 + "\n")
 
     # 记录每个客户端的本地损失
     client_local_losses = np.ones(args.num_users)
@@ -677,6 +718,7 @@ if __name__ == '__main__':
     print_every = 2
     test_accuracies = []
     shapley_time_history = []   # 每轮 Shapley 计算耗时
+    dp_round_history = []
 
     # PoC评估用的criterion
     poc_criterion = torch.nn.CrossEntropyLoss().to(device)
@@ -763,30 +805,26 @@ if __name__ == '__main__':
                                           idxs=user_groups[idx], logger=logger, device=device)
             w, loss, actual_samples = local_model.update_weights(
                 model=copy.deepcopy(global_model), global_round=epoch)
+            w, dp_stats = _apply_local_dp(global_weights, w, args)
 
-            # ============= AES-256-GCM 加密传输（方案2）=============
-            if args.use_crypto and crypto_manager is not None:
-                # Step 1: 客户端加密权重（模拟加密上传）
-                encrypted_pkg = crypto_manager.encrypt(idx, w)
-                # Step 2: 服务器解密，获取短暂明文用于 SV 和聚合
-                w_plain = crypto_manager.decrypt_and_destroy(encrypted_pkg)
-                del encrypted_pkg          # 销毁密文传输包
-                # 只做一次deepcopy，local_weights和current_round_models共享引用
-                w_copy = copy.deepcopy(w_plain)
-                local_weights.append(w_copy)
-                if args.use_shapley:
-                    current_round_models[idx] = w_copy
-                del w_plain                # Step 3: 立即销毁明文，不持久化
-            else:
-                # 只做一次deepcopy，共享引用以减少内存开销
-                w_copy = copy.deepcopy(w)
-                local_weights.append(w_copy)
-                if args.use_shapley:
-                    current_round_models[idx] = w_copy
-            # ======================================================
+            # 只做一次deepcopy，共享引用以减少内存开销
+            w_copy = copy.deepcopy(w)
+            local_weights.append(w_copy)
+            if args.use_shapley:
+                current_round_models[idx] = w_copy
 
             local_losses.append(copy.deepcopy(loss))
             client_local_losses[idx] = loss
+
+            if args.use_local_dp:
+                dp_round_history.append({
+                    'round': epoch,
+                    'client': int(idx),
+                    'pre_clip_norm': dp_stats['pre_clip_norm'],
+                    'post_clip_norm': dp_stats['post_clip_norm'],
+                    'clip_factor': dp_stats['clip_factor'],
+                    'noise_std': dp_stats['noise_std'],
+                })
 
         # 保存本轮数据（用于下一轮计算Shapley值）
         if args.use_shapley:
@@ -857,10 +895,6 @@ if __name__ == '__main__':
         # 每轮都记录测试集准确率
         test_acc, test_loss = test_inference(args, global_model, test_dataset, device=device)
         test_accuracies.append(test_acc)
-
-        # 记录本轮 crypto 轮次（用于计算每轮平均加解密耗时）
-        if args.use_crypto and crypto_manager is not None:
-            crypto_manager.rounds_processed += 1
 
         if (epoch + 1) % print_every == 0:
             print('Test Accuracy: {:.2f}%'.format(100 * test_acc))
@@ -953,14 +987,15 @@ if __name__ == '__main__':
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         exp_folder = f'../save/{timestamp}'
 
-    save_results(
+        save_results(
         args, exp_folder, timestamp, num_selected,
         train_loss, train_accuracy, test_accuracies, test_acc,
         shapley_values, client_participation_counts, client_last_round,
         energy_manager, lyapunov_optimizer,
-        crypto_manager, start_time,
+        start_time,
         sv_sample_size=sv_sample_size if args.use_shapley else 0,
-        ucb_rewards=ucb_rewards, ucb_counts=ucb_counts
+        ucb_rewards=ucb_rewards, ucb_counts=ucb_counts,
+        dp_round_history=dp_round_history
     )
 
     print('\n Total Run Time: {0:0.4f} seconds'.format(time.time() - start_time))
@@ -1003,9 +1038,13 @@ if __name__ == '__main__':
         lyap_viz_path = f'{exp_folder}/lyapunov_{args.dataset}_{timestamp}.png'
         lyapunov_optimizer.visualize_optimization(lyap_viz_path)
 
-    if args.use_crypto and crypto_manager is not None:
-        print(f"\n梯度加密统计:")
-        crypto_manager.print_statistics()
+    if args.use_local_dp and dp_round_history:
+        clip_factors = [item['clip_factor'] for item in dp_round_history]
+        pre_clip_norms = [item['pre_clip_norm'] for item in dp_round_history]
+        print(f"\nLocal DP统计:")
+        print(f"  平均更新范数(裁剪前): {np.mean(pre_clip_norms):.4f}")
+        print(f"  平均裁剪系数: {np.mean(clip_factors):.4f}")
+        print(f"  噪声乘子 sigma_dp: {args.dp_noise_multiplier:.4f}")
 
     print(f"总运行时间: {time.time() - start_time:.2f}秒")
     print(f"{'=' * 60}")

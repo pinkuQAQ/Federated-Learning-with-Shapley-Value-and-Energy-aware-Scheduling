@@ -42,7 +42,10 @@ LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.25
 SEED=42
-OUTPUT_FOLDER="mnist_alpha0.25_$(date +%Y%m%d)"
+DP_CLIP_NORM=1.0
+DP_NOISE_MULTIPLIER=0.05
+DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
+OUTPUT_FOLDER="mnist_alpha0.25_ldp_$(date +%Y%m%d)"
 
 # ============================================
 # [1/5] Ours
@@ -62,6 +65,7 @@ echo "[1/5] Running Ours..."
     --use_lyapunov \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[1/5] Done!"
 
@@ -76,6 +80,7 @@ echo "[2/5] Running FedAvg..."
     --dirichlet_alpha $DIRICHLET_ALPHA --seed $SEED \
     --no_shapley \
     --selection_method random \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[2/5] Done!"
 
@@ -90,6 +95,7 @@ echo "[3/5] Running PoC..."
     --dirichlet_alpha $DIRICHLET_ALPHA --seed $SEED \
     --no_shapley \
     --selection_method poc \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[3/5] Done!"
 
@@ -104,6 +110,7 @@ echo "[4/5] Running UCB..."
     --dirichlet_alpha $DIRICHLET_ALPHA --seed $SEED \
     --no_shapley \
     --selection_method ucb \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[4/5] Done!"
 
@@ -120,6 +127,7 @@ echo "[5/5] Running FedProx..."
     --selection_method random \
     --use_fedprox \
     --fedprox_mu 0.01 \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 echo "[5/5] Done!"
 

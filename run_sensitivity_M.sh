@@ -38,6 +38,9 @@ LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.1
 SEED=42
+DP_CLIP_NORM=1.0
+DP_NOISE_MULTIPLIER=0.05
+DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
 # ============================================
@@ -58,7 +61,7 @@ python federated_main.py \
     --use_lyapunov \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
-    --use_crypto \
+    $DP_ARGS \
     --output_folder sens_M5_$RUN_TAG
 echo "[1/5] Done!"
 
@@ -81,7 +84,7 @@ python federated_main.py \
     --use_lyapunov \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
-    --use_crypto \
+    $DP_ARGS \
     --output_folder sens_M10_$RUN_TAG
 echo "[2/5] Done!"
 
@@ -104,7 +107,7 @@ python federated_main.py \
     --use_lyapunov \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
-    --use_crypto \
+    $DP_ARGS \
     --output_folder sens_M20_$RUN_TAG
 echo "[3/5] Done!"
 
@@ -127,7 +130,7 @@ python federated_main.py \
     --use_lyapunov \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
-    --use_crypto \
+    $DP_ARGS \
     --output_folder sens_M50_$RUN_TAG
 echo "[4/5] Done!"
 
@@ -150,7 +153,7 @@ python federated_main.py \
     --use_lyapunov \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
-    --use_crypto \
+    $DP_ARGS \
     --output_folder sens_M100_$RUN_TAG
 echo "[5/5] Done!"
 

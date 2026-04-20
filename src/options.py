@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 # Python version: 3.6
 
@@ -121,11 +121,13 @@ def args_parser():
                         help='FedProx proximal term coefficient μ (default: 0.01)')
     # ================================================
 
-    # ============= 对称加密参数（方案2：AES-256-GCM + 即时明文销毁）=============
-    parser.add_argument('--use_crypto', action='store_true', default=False,
-                        help='enable AES-256-GCM encryption for gradient transmission. '
-                             'Threat model: honest-but-curious server. '
-                             'Plaintext is immediately destroyed after each use.')
+    # ============= Local DP 参数 =============
+    parser.add_argument('--use_local_dp', action='store_true', default=False,
+                        help='enable client-side local differential privacy before upload')
+    parser.add_argument('--dp_clip_norm', type=float, default=1.0,
+                        help='L2 clipping norm C for local model updates')
+    parser.add_argument('--dp_noise_multiplier', type=float, default=0.05,
+                        help='Gaussian noise multiplier sigma_dp for local DP')
     # ================================================
 
     # ============= 计算能量参数 =============

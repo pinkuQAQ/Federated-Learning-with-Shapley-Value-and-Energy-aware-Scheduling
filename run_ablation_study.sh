@@ -61,7 +61,10 @@ LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.1
 SEED=42
-OUTPUT_FOLDER="${OUTPUT_FOLDER:-ablation_$(date +%Y%m%d_%H%M%S)}"
+DP_CLIP_NORM=1.0
+DP_NOISE_MULTIPLIER=0.05
+DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
+OUTPUT_FOLDER="${OUTPUT_FOLDER:-ablation_ldp_$(date +%Y%m%d_%H%M%S)}"
 
 echo "Task: ablation rerun"
 echo "Output folder: $OUTPUT_FOLDER"
@@ -81,10 +84,10 @@ python federated_main.py \
     --use_lyapunov \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
-    --use_crypto \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 
-echo "[2/4] Running w/o Crypto..."
+echo "[2/4] Running w/o LDP..."
 python federated_main.py \
     --dataset $DATASET --model $MODEL --epochs $EPOCHS \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
@@ -107,11 +110,13 @@ python federated_main.py \
     --num_users $NUM_USERS --num_selected $NUM_SELECTED \
     --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
     --dirichlet_alpha $DIRICHLET_ALPHA --seed $SEED \
-    --selection_method greedy \
     --shapley_update_method mean \
     --shapley_alpha 0.5 \
     --shapley_max_iter 20 \
-    --use_crypto \
+    --use_energy \
+    --initial_energy 500.0 \
+    --energy_threshold 50.0 \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 
 echo "[4/4] Running w/o SV..."
@@ -128,7 +133,7 @@ python federated_main.py \
     --use_lyapunov \
     --lyapunov_V 10.0 \
     --energy_budget 5.0 \
-    --use_crypto \
+    $DP_ARGS \
     --output_folder $OUTPUT_FOLDER
 
 echo "Done. Results saved to: /data/home/zhaozhanshan/FLSV/save/$OUTPUT_FOLDER"

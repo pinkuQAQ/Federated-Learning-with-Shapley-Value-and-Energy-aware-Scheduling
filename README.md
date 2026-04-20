@@ -1,4 +1,4 @@
-# Federated Learning with Shapley Value and Energy-aware Scheduling
+﻿# Federated Learning with Shapley Value and Energy-aware Scheduling
 
 ## 项目简介
 
@@ -8,7 +8,7 @@
 
 | 方法 | 说明 |
 |------|------|
-| **Dual Scheduling（本文方法）** | Shapley值 + 能量感知 + 李雅普诺夫优化 + AES-256-GCM加密 |
+| **Dual Scheduling（本文方法）** | Shapley值 + 能量感知 + 李雅普诺夫优化 |
 | **FedAvg** | 随机客户端选择（基线） |
 | **PoC** | Power of Choice，基于本地损失的两阶段选择 |
 | **UCB** | UCB1 Bandit客户端选择 |
@@ -29,11 +29,9 @@ FLSV/
 │   ├── shapley.py              # Shapley值计算（GTG-Shapley）
 │   ├── energy.py               # 无线信道能量模型
 │   ├── lyapunov_optimizer.py   # 李雅普诺夫优化器
-│   ├── crypto_utils.py         # AES-256-GCM梯度加密
 │   └── plot.py                 # 实验结果可视化
 ├── run_baseline_comparison.bat  # 主对比实验（5种方法）
 ├── run_channel_robustness.bat   # 信道鲁棒性实验（σ²=0.5/1.0/3.0）
-├── run_vs_fedavg_crypto.bat     # 加密消融实验
 ├── requirements.txt
 └── README.md
 ```
@@ -89,7 +87,6 @@ python plot.py
 - **Shapley值评估**：GTG-Shapley 算法评估客户端对全局模型的边际贡献
 - **能量感知调度**：基于无线信道模型（Rayleigh衰落）建模客户端能耗
 - **李雅普诺夫优化**：动态平衡模型性能与长期能量约束
-- **AES-256-GCM加密**：梯度传输加密，防御诚实但好奇的服务器
 - **信道鲁棒性**：支持不同噪声方差（σ²）下的性能评估
 
 ## 依赖环境
@@ -100,7 +97,6 @@ torch
 torchvision
 numpy
 matplotlib
-pycryptodome
 tensorboard
 tqdm
 ```

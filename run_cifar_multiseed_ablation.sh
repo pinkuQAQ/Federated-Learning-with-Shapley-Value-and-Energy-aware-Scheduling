@@ -33,10 +33,13 @@ LOCAL_BS=32
 LR=0.01
 ALPHA=0.25
 SEEDS=(42 52 62 72 82)
+DP_CLIP_NORM=1.0
+DP_NOISE_MULTIPLIER=0.05
+DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d)}"
 
 for SEED in "${SEEDS[@]}"; do
-    OUTPUT_FOLDER="ablation_ms_alpha${ALPHA}_seed${SEED}_${RUN_TAG}"
+    OUTPUT_FOLDER="ablation_ms_ldp_alpha${ALPHA}_seed${SEED}_${RUN_TAG}"
 
     echo ""
     echo "========================================"
@@ -59,10 +62,10 @@ for SEED in "${SEEDS[@]}"; do
         --use_lyapunov \
         --lyapunov_V 10.0 \
         --energy_budget 5.0 \
-        --use_crypto \
+        $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 
-    echo "[2/4] w/o Crypto"
+    echo "[2/4] w/o LDP"
     python federated_main.py \
         --dataset $DATASET --model $MODEL --epochs $EPOCHS \
         --num_users $NUM_USERS --num_selected $NUM_SELECTED \
@@ -85,11 +88,13 @@ for SEED in "${SEEDS[@]}"; do
         --num_users $NUM_USERS --num_selected $NUM_SELECTED \
         --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
         --dirichlet_alpha $ALPHA --seed $SEED \
-        --selection_method greedy \
         --shapley_update_method mean \
         --shapley_alpha 0.5 \
         --shapley_max_iter 20 \
-        --use_crypto \
+        --use_energy \
+        --initial_energy 500.0 \
+        --energy_threshold 50.0 \
+        $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 
     echo "[4/4] w/o SV"
@@ -106,7 +111,7 @@ for SEED in "${SEEDS[@]}"; do
         --use_lyapunov \
         --lyapunov_V 10.0 \
         --energy_budget 5.0 \
-        --use_crypto \
+        $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 done
 
