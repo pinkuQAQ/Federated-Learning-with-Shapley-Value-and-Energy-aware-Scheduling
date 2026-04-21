@@ -987,7 +987,7 @@ if __name__ == '__main__':
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         exp_folder = f'../save/{timestamp}'
 
-        save_results(
+    save_results(
         args, exp_folder, timestamp, num_selected,
         train_loss, train_accuracy, test_accuracies, test_acc,
         shapley_values, client_participation_counts, client_last_round,

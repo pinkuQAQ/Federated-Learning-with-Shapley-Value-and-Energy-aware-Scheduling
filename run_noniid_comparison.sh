@@ -34,8 +34,6 @@ SEED=42
 DP_CLIP_NORM=1.0
 DP_NOISE_MULTIPLIER=0.05
 DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
-
-# 4个不同的 Dirichlet α 值
 ALPHAS=(0.1 0.25 0.5 1.0)
 
 TOTAL=$((${#ALPHAS[@]} * 5))
