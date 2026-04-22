@@ -401,7 +401,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                  test_accuracies, test_acc, shapley_values, client_participation_counts,
                  client_last_round, energy_manager, lyapunov_optimizer,
                  start_time, sv_sample_size=0, ucb_rewards=None, ucb_counts=None,
-                 dp_round_history=None):
+                 dp_round_history=None, shapley_time_history=None):
     """保存实验结果"""
     os.makedirs(exp_folder, exist_ok=True)
 
@@ -440,7 +440,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             'shapley_values': shapley_values,
             'client_participation_counts': client_participation_counts,
             'client_last_round': client_last_round,
-            'shapley_time_history': shapley_time_history,
+            'shapley_time_history': shapley_time_history or [],
         })
 
     if args.use_energy and energy_manager is not None:
@@ -660,7 +660,8 @@ if __name__ == '__main__':
             seed=args.seed,
             kappa=args.kappa,
             cpu_freq=args.cpu_freq,
-            cycles_per_sample=args.cycles_per_sample
+            cycles_per_sample=args.cycles_per_sample,
+            local_epochs=args.local_ep
         )
     else:
         energy_manager = None
@@ -995,7 +996,8 @@ if __name__ == '__main__':
         start_time,
         sv_sample_size=sv_sample_size if args.use_shapley else 0,
         ucb_rewards=ucb_rewards, ucb_counts=ucb_counts,
-        dp_round_history=dp_round_history
+        dp_round_history=dp_round_history,
+        shapley_time_history=shapley_time_history if args.use_shapley else None,
     )
 
     print('\n Total Run Time: {0:0.4f} seconds'.format(time.time() - start_time))

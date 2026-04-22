@@ -40,8 +40,8 @@ class MCShapley:
         """
         self.model_class = model_class
         self.args = args
-        self.epsilon = epsilon
-        self.max_iterations = max_iterations
+        self.epsilon = epsilon if epsilon is not None else 1e-5
+        self.max_iterations = max_iterations if max_iterations is not None else 20
         self.device = device
         self.verbose = verbose
 
@@ -272,8 +272,6 @@ class MCShapley:
 
                 if abs(vM - v_current) < self.epsilon:
                     logger.debug("    轮内截断触发")
-                    for remaining_id in permutation[j:]:
-                        count_dict[remaining_id] += 1
                     break
 
             elapsed = time.time() - start_time

@@ -436,7 +436,7 @@ class EnergyAwareClientManager:
 
     def __init__(self, num_clients, sigma_squared=1.0, channel_model='rayleigh',
                  initial_energy=1000.0, energy_threshold=100.0, seed=42,
-                 kappa=1e-28, cpu_freq=1e9, cycles_per_sample=20.0):
+                 kappa=1e-28, cpu_freq=1e9, cycles_per_sample=20.0, local_epochs=1):
         """
         初始化能量感知客户端管理器
 
@@ -461,6 +461,7 @@ class EnergyAwareClientManager:
         self.kappa = kappa
         self.cpu_freq = cpu_freq
         self.cycles_per_sample = cycles_per_sample
+        self.local_epochs = local_epochs
 
         # 初始化客户端能量（每个客户端的剩余能量）
         self.client_energy = np.ones(num_clients) * initial_energy
@@ -545,7 +546,7 @@ class EnergyAwareClientManager:
         # 计算能量: E_comp = κ · f² · C · D
         if client_data_sizes is not None:
             data_sizes = np.array(client_data_sizes, dtype=np.float64)
-            e_comp = self.kappa * (self.cpu_freq ** 2) * self.cycles_per_sample * data_sizes
+            e_comp = self.kappa * (self.cpu_freq ** 2) * self.cycles_per_sample * self.local_epochs * data_sizes
         else:
             e_comp = 0.0
 
