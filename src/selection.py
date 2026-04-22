@@ -257,3 +257,52 @@ def power_of_choice_selection(client_losses: np.ndarray,
     candidate_losses.sort(key=lambda x: x[1], reverse=True)
 
     return [c for c, _ in candidate_losses[:num_selected]]
+
+
+def fedcs_selection(per_client_cost: np.ndarray,
+                    num_selected: int,
+                    deadline: float,
+                    available_clients: List[int] = None) -> List[int]:
+    """
+    FedCS 客户端选择策略 (Nishio & Yonetani, 2019)
+
+    在 per-round deadline 内，按完成时间升序贪心接纳客户端，
+    直到累计完成时间超过 deadline 或已凑满 num_selected 个。
+    本实现用 (E_trans + E_comp) 作为完成时间的代理 —— 数值上与
+    transmission/compute time 同向，便于直接复用 energy_manager 的输出。
+
+    Args:
+        per_client_cost: 每个客户端的完成时间代理（一般为 E_n(t)）
+        num_selected: 期望选择的客户端数量 K
+        deadline: 单轮 deadline（与 per_client_cost 同量纲）
+        available_clients: 可用客户端列表，None 表示全部可用
+
+    Returns:
+        selected_clients: 选择的客户端索引列表（可能少于 K）
+    """
+    if available_clients is None:
+        available_clients = list(range(len(per_client_cost)))
+
+    if len(available_clients) == 0:
+        return []
+
+    # 按完成时间升序排序
+    candidates = sorted(available_clients, key=lambda c: per_client_cost[c])
+
+    # 贪心：从最便宜开始，直到 deadline 用完或够 K 个
+    cumulative = 0.0
+    selected = []
+    for c in candidates:
+        cost_c = float(per_client_cost[c])
+        if cumulative + cost_c > deadline:
+            break
+        selected.append(c)
+        cumulative += cost_c
+        if len(selected) >= num_selected:
+            break
+
+    # 退化保护：deadline 太紧导致一个都没选到时，至少给一个最便宜的，避免空 round
+    if len(selected) == 0 and len(candidates) > 0:
+        selected = [candidates[0]]
+
+    return selected

@@ -12,7 +12,11 @@ echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURMD_NODENAME"
 echo "Start: $(date)"
-echo "Sensitivity Analysis: Local DP noise multiplier"
+echo "Task: Noise-multiplier sweep (σ_dp) for the optional upload-perturbation module"
+echo "Note: the sweep spans σ_dp ∈ {0, 0.01, 0.05, 0.1, 0.2, 0.5, 1.0}."
+echo "      σ_dp ≤ 0.2 is the utility-preserving regime (no formal DP)."
+echo "      σ_dp ∈ {0.5, 1.0} is included to mark the regime where (ε,δ)"
+echo "      starts to bind meaningfully at the cost of accuracy."
 echo "========================================"
 
 source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
@@ -25,16 +29,16 @@ mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 DATASET=cifar
 MODEL=cnn
-EPOCHS=100
+EPOCHS=80
 NUM_USERS=100
 NUM_SELECTED=10
 LOCAL_EP=2
 LOCAL_BS=32
 LR=0.01
-DIRICHLET_ALPHA=0.25
+DIRICHLET_ALPHA=0.1
 SEED=42
 DP_CLIP_NORM=1.0
-NOISE_MULTIPLIERS=(0.0 0.01 0.05 0.1 0.2)
+NOISE_MULTIPLIERS=(0.0 0.01 0.05 0.1 0.2 0.5 1.0)
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
 for SIGMA_DP in "${NOISE_MULTIPLIERS[@]}"; do

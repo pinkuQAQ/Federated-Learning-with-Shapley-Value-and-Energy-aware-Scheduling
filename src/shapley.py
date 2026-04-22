@@ -26,7 +26,7 @@ class MCShapley:
     """
 
     def __init__(self, model_class, args, epsilon=None, max_iterations=None,
-                 device=None, verbose=False):
+                 device=None, verbose=False, rng=None):
         """
         初始化GTG-Shapley计算器
 
@@ -37,6 +37,7 @@ class MCShapley:
             max_iterations: 蒙特卡洛最大迭代次数
             device: 计算设备
             verbose: 是否打印详细信息
+            rng: numpy.random.Generator，用于排列采样的可复现 RNG（不传则按 args.seed 派生）
         """
         self.model_class = model_class
         self.args = args
@@ -44,6 +45,11 @@ class MCShapley:
         self.max_iterations = max_iterations if max_iterations is not None else 20
         self.device = device
         self.verbose = verbose
+        if rng is not None:
+            self.rng = rng
+        else:
+            seed = getattr(args, 'seed', 0)
+            self.rng = np.random.default_rng(seed * 9973 + 7)
 
         self.criterion = nn.CrossEntropyLoss().to(self.device)
 
@@ -218,7 +224,7 @@ class MCShapley:
             logger.debug(f"第{tau + 1}/{self.max_iterations}次迭代")
 
             permutation = client_ids.copy()
-            random.shuffle(permutation)
+            self.rng.shuffle(permutation)
 
             logger.debug(f"客户端ID排列: {permutation}")
 

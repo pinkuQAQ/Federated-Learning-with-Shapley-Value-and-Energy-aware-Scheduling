@@ -8,11 +8,20 @@
 #SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_abla_ms_%j.out
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_abla_ms_%j.err
 
+# =============================================================================
+# Task:  Ablation — CIFAR-10, α=0.1, 3 seeds, 4 variants, 80 epochs
+# Seeds: 42, 123, 2024
+# Variants: Full (SV+Lyap+Energy), w/o SV, w/o Lyap, w/o Energy
+# Removed: "w/o LDP" — upload perturbation is no longer a headline contribution,
+#   so the LDP-on-vs-off sweep is reported in the σ_dp sensitivity script instead.
+# Expect ~30 min/run × 3 seeds × 4 variants ≈ 6 h
+# =============================================================================
+
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURMD_NODENAME"
 echo "Start: $(date)"
-echo "Task: CIFAR-10 multi-seed ablation"
+echo "Task: CIFAR-10 ablation (multi-seed)"
 echo "========================================"
 
 source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
@@ -25,21 +34,23 @@ mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 DATASET=cifar
 MODEL=cnn
-EPOCHS=100
+EPOCHS=80
 NUM_USERS=100
 NUM_SELECTED=10
 LOCAL_EP=2
 LOCAL_BS=32
 LR=0.01
-ALPHA=0.25
-SEEDS=(42 52 62 72 82)
+ALPHA=0.1
+SEEDS=(42 123 2024)
+
 DP_CLIP_NORM=1.0
-DP_NOISE_MULTIPLIER=0.05
+DP_NOISE_MULTIPLIER=0.01
 DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
+
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d)}"
 
 for SEED in "${SEEDS[@]}"; do
-    OUTPUT_FOLDER="ablation_ms_ldp_alpha${ALPHA}_seed${SEED}_${RUN_TAG}"
+    OUTPUT_FOLDER="ablation_3seed_a${ALPHA}_seed${SEED}_${RUN_TAG}"
 
     echo ""
     echo "========================================"
@@ -47,7 +58,7 @@ for SEED in "${SEEDS[@]}"; do
     echo "Output: ${OUTPUT_FOLDER}"
     echo "========================================"
 
-    echo "[1/4] Full"
+    echo "[1/4] Full (SV + Lyapunov + Energy)"
     python federated_main.py \
         --dataset $DATASET --model $MODEL --epochs $EPOCHS \
         --num_users $NUM_USERS --num_selected $NUM_SELECTED \
@@ -57,6 +68,7 @@ for SEED in "${SEEDS[@]}"; do
         --shapley_alpha 0.5 \
         --shapley_max_iter 20 \
         --use_energy \
+        --sigma_squared 1.0 \
         --initial_energy 500.0 \
         --energy_threshold 50.0 \
         --use_lyapunov \
@@ -65,39 +77,7 @@ for SEED in "${SEEDS[@]}"; do
         $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 
-    echo "[2/4] w/o LDP"
-    python federated_main.py \
-        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
-        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
-        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
-        --dirichlet_alpha $ALPHA --seed $SEED \
-        --shapley_update_method mean \
-        --shapley_alpha 0.5 \
-        --shapley_max_iter 20 \
-        --use_energy \
-        --initial_energy 500.0 \
-        --energy_threshold 50.0 \
-        --use_lyapunov \
-        --lyapunov_V 10.0 \
-        --energy_budget 5.0 \
-        --output_folder $OUTPUT_FOLDER
-
-    echo "[3/4] w/o Lyapunov"
-    python federated_main.py \
-        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
-        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
-        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
-        --dirichlet_alpha $ALPHA --seed $SEED \
-        --shapley_update_method mean \
-        --shapley_alpha 0.5 \
-        --shapley_max_iter 20 \
-        --use_energy \
-        --initial_energy 500.0 \
-        --energy_threshold 50.0 \
-        $DP_ARGS \
-        --output_folder $OUTPUT_FOLDER
-
-    echo "[4/4] w/o SV"
+    echo "[2/4] w/o SV (random + Energy + Lyapunov)"
     python federated_main.py \
         --dataset $DATASET --model $MODEL --epochs $EPOCHS \
         --num_users $NUM_USERS --num_selected $NUM_SELECTED \
@@ -106,11 +86,40 @@ for SEED in "${SEEDS[@]}"; do
         --no_shapley \
         --selection_method random \
         --use_energy \
+        --sigma_squared 1.0 \
         --initial_energy 500.0 \
         --energy_threshold 50.0 \
         --use_lyapunov \
         --lyapunov_V 10.0 \
         --energy_budget 5.0 \
+        $DP_ARGS \
+        --output_folder $OUTPUT_FOLDER
+
+    echo "[3/4] w/o Lyapunov (SV + Energy, no queue)"
+    python federated_main.py \
+        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
+        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
+        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
+        --dirichlet_alpha $ALPHA --seed $SEED \
+        --shapley_update_method mean \
+        --shapley_alpha 0.5 \
+        --shapley_max_iter 20 \
+        --use_energy \
+        --sigma_squared 1.0 \
+        --initial_energy 500.0 \
+        --energy_threshold 50.0 \
+        $DP_ARGS \
+        --output_folder $OUTPUT_FOLDER
+
+    echo "[4/4] w/o Energy (SV only, no eligibility filter, no queue)"
+    python federated_main.py \
+        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
+        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
+        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
+        --dirichlet_alpha $ALPHA --seed $SEED \
+        --shapley_update_method mean \
+        --shapley_alpha 0.5 \
+        --shapley_max_iter 20 \
         $DP_ARGS \
         --output_folder $OUTPUT_FOLDER
 done

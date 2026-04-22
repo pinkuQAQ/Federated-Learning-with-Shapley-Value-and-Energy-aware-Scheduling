@@ -501,7 +501,8 @@ class EnergyAwareClientManager:
         Returns:
             channel_gains: 每个客户端的信道增益数组
         """
-        rng = np.random.RandomState(round_num * self.seed)
+        # 用 prime mixing 避免 round=0 退化为 RandomState(0)，且让相邻轮次 seed 真正不同
+        rng = np.random.RandomState(int(self.seed) * 10007 + int(round_num) + 1)
 
         if self.channel_model == 'rayleigh':
             channel_gains = rng.rayleigh(scale=1, size=self.num_clients)

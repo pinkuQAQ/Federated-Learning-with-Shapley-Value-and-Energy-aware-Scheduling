@@ -30,7 +30,7 @@ mkdir -p /data/home/zhaozhanshan/FLSV/save
 # 共享参数（与消融实验保持一致）
 DATASET=cifar
 MODEL=cnn
-EPOCHS=100
+EPOCHS=80
 NUM_USERS=100
 NUM_SELECTED=10
 LOCAL_EP=2
@@ -39,7 +39,7 @@ LR=0.01
 DIRICHLET_ALPHA=0.1
 SEED=42
 DP_CLIP_NORM=1.0
-DP_NOISE_MULTIPLIER=0.05
+DP_NOISE_MULTIPLIER=0.01
 DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 

@@ -25,6 +25,7 @@ COLORS = {
     'Ours (Full)': '#2ca02c',
     'w/o SV':      '#ff7f0e',
     'w/o Lyapunov':'#1f77b4',
+    'w/o LDP':     '#d62728',
 }
 
 
@@ -51,12 +52,15 @@ def load_ablation_data(save_dir=ABLATION_DIR):
             args = data.get('args', {})
             filename = pkl_file.name.lower()
 
-            use_sv       = args.get('use_shapley', False)
+            use_sv = args.get('use_shapley', False)
             use_lyapunov = args.get('use_lyapunov', False)
-            use_energy   = args.get('use_energy', False)
+            use_energy = args.get('use_energy', False)
+            use_ldp = args.get('use_local_dp', False)
 
-            if use_sv and use_lyapunov and use_energy:
+            if use_sv and use_lyapunov and use_energy and use_ldp:
                 name = 'Ours (Full)'
+            elif use_sv and use_lyapunov and use_energy and not use_ldp:
+                name = 'w/o LDP'
             elif use_sv and use_energy and not use_lyapunov:
                 name = 'w/o Lyapunov'
             elif not use_sv and use_lyapunov and use_energy:
@@ -145,6 +149,42 @@ def plot_sv_ablation(save_dir=ABLATION_DIR, output_path=None):
     plt.close()
 
 
+def plot_ldp_ablation(save_dir=ABLATION_DIR, output_path=None):
+    if output_path is None:
+        output_path = os.path.join(OUTPUT_DIR, 'ablation_ldp.png')
+
+    print("\n" + "=" * 60)
+    print("消融实验 3：LDP 上传层对准确率的影响")
+    print("=" * 60)
+
+    data_dict = load_ablation_data(save_dir)
+    targets = ['Ours (Full)', 'w/o LDP']
+    results = {k: data_dict[k] for k in targets if k in data_dict}
+
+    if len(results) < 2:
+        print(f"缺少数据，需要: {targets}，已有: {list(results.keys())}")
+        return
+
+    plt.figure(figsize=(6.4, 4.8))
+    for name, data in results.items():
+        acc = data['test_accuracy']
+        rounds = range(1, len(acc) + 1)
+        smoothed = moving_average(acc, window_size=10)
+        plt.plot(rounds, acc, color=COLORS[name], alpha=0.22, linewidth=1)
+        plt.plot(rounds, smoothed, label=name, color=COLORS[name], linewidth=2.5)
+
+    plt.xlabel('Training Round', fontsize=12)
+    plt.ylabel('Test Accuracy', fontsize=12)
+    plt.title('Accuracy: Ours vs w/o LDP', fontsize=13, fontweight='bold')
+    plt.legend(fontsize=11)
+    plt.grid(True, alpha=0.3)
+    plt.tight_layout()
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    plt.savefig(output_path, dpi=300, bbox_inches='tight')
+    print(f"图已保存: {output_path}")
+    plt.close()
+
+
 # ============================================================
 # 2. Energy + Lyapunov 消融：能耗 + Q(t) 曲线对比
 # ============================================================
@@ -216,4 +256,5 @@ if __name__ == '__main__':
     print(f"数据目录: {ABLATION_DIR}")
     plot_sv_ablation()
     plot_energy_lyapunov_ablation()
+    plot_ldp_ablation()
     print("\n所有消融图表生成完毕！")

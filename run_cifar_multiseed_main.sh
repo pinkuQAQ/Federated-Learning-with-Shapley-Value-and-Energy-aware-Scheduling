@@ -8,11 +8,19 @@
 #SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_cifar_ms_%j.out
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_cifar_ms_%j.err
 
+# =============================================================================
+# Task:  Main table — CIFAR-10, α=0.1, 3 seeds, 6 methods, 80 epochs
+# Seeds: 42, 123, 2024
+# Methods: Ours, FedAvg, PoC, UCB, FedProx, FedCS
+# σ_dp:  0.01  (post-LDP-review default; σ=0.05 kills accuracy; σ=0 is also reported)
+# Expect ~35 min/run × 3 × 6 = ~11 h per σ config. Two σ configs ⇒ ~22 h.
+# =============================================================================
+
 echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURMD_NODENAME"
 echo "Start: $(date)"
-echo "Task: CIFAR-10 multi-seed main results"
+echo "Task: CIFAR-10 main table (multi-seed)"
 echo "========================================"
 
 source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
@@ -25,95 +33,115 @@ mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 DATASET=cifar
 MODEL=cnn
-EPOCHS=100
+EPOCHS=80
 NUM_USERS=100
 NUM_SELECTED=10
 LOCAL_EP=2
 LOCAL_BS=32
 LR=0.01
-ALPHAS=(0.25 0.5)
-SEEDS=(42 52 62 72 82)
+ALPHA=0.1
+SEEDS=(42 123 2024)
+
+# σ_dp=0.01 gives ~51% accuracy; set to 0 to rerun the clipping-only baseline
 DP_CLIP_NORM=1.0
-DP_NOISE_MULTIPLIER=0.05
+DP_NOISE_MULTIPLIER=0.01
 DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
+
+# FedCS deadline calibrated against σ_ch²=1.0 + default compute cost
+FEDCS_DEADLINE=5.0
+
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d)}"
 
-for ALPHA in "${ALPHAS[@]}"; do
-    for SEED in "${SEEDS[@]}"; do
-        OUTPUT_FOLDER="cifar_ms_ldp_alpha${ALPHA}_seed${SEED}_${RUN_TAG}"
+for SEED in "${SEEDS[@]}"; do
+    OUTPUT_FOLDER="main_3seed_a${ALPHA}_sigma${DP_NOISE_MULTIPLIER}_seed${SEED}_${RUN_TAG}"
 
-        echo ""
-        echo "========================================"
-        echo "Alpha=${ALPHA} Seed=${SEED}"
-        echo "Output: ${OUTPUT_FOLDER}"
-        echo "========================================"
+    echo ""
+    echo "========================================"
+    echo "Alpha=${ALPHA} Seed=${SEED}"
+    echo "Output: ${OUTPUT_FOLDER}"
+    echo "========================================"
 
-        echo "[1/5] Ours"
-        python federated_main.py \
-            --dataset $DATASET --model $MODEL --epochs $EPOCHS \
-            --num_users $NUM_USERS --num_selected $NUM_SELECTED \
-            --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
-            --dirichlet_alpha $ALPHA --seed $SEED \
-            --shapley_update_method mean \
-            --shapley_alpha 0.5 \
-            --shapley_max_iter 20 \
-            --use_energy \
-            --sigma_squared 1.0 \
-            --initial_energy 500.0 \
-            --energy_threshold 50.0 \
-            --use_lyapunov \
-            --lyapunov_V 10.0 \
-            --energy_budget 5.0 \
-            $DP_ARGS \
-            --output_folder $OUTPUT_FOLDER
+    echo "[1/6] Ours (SV + Energy + Lyapunov)"
+    python federated_main.py \
+        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
+        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
+        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
+        --dirichlet_alpha $ALPHA --seed $SEED \
+        --shapley_update_method mean \
+        --shapley_alpha 0.5 \
+        --shapley_max_iter 20 \
+        --use_energy \
+        --sigma_squared 1.0 \
+        --initial_energy 500.0 \
+        --energy_threshold 50.0 \
+        --use_lyapunov \
+        --lyapunov_V 10.0 \
+        --energy_budget 5.0 \
+        $DP_ARGS \
+        --output_folder $OUTPUT_FOLDER
 
-        echo "[2/5] FedAvg"
-        python federated_main.py \
-            --dataset $DATASET --model $MODEL --epochs $EPOCHS \
-            --num_users $NUM_USERS --num_selected $NUM_SELECTED \
-            --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
-            --dirichlet_alpha $ALPHA --seed $SEED \
-            --no_shapley \
-            --selection_method random \
-            $DP_ARGS \
-            --output_folder $OUTPUT_FOLDER
+    echo "[2/6] FedAvg (random)"
+    python federated_main.py \
+        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
+        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
+        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
+        --dirichlet_alpha $ALPHA --seed $SEED \
+        --no_shapley \
+        --selection_method random \
+        $DP_ARGS \
+        --output_folder $OUTPUT_FOLDER
 
-        echo "[3/5] PoC"
-        python federated_main.py \
-            --dataset $DATASET --model $MODEL --epochs $EPOCHS \
-            --num_users $NUM_USERS --num_selected $NUM_SELECTED \
-            --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
-            --dirichlet_alpha $ALPHA --seed $SEED \
-            --no_shapley \
-            --selection_method poc \
-            $DP_ARGS \
-            --output_folder $OUTPUT_FOLDER
+    echo "[3/6] PoC"
+    python federated_main.py \
+        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
+        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
+        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
+        --dirichlet_alpha $ALPHA --seed $SEED \
+        --no_shapley \
+        --selection_method poc \
+        $DP_ARGS \
+        --output_folder $OUTPUT_FOLDER
 
-        echo "[4/5] UCB"
-        python federated_main.py \
-            --dataset $DATASET --model $MODEL --epochs $EPOCHS \
-            --num_users $NUM_USERS --num_selected $NUM_SELECTED \
-            --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
-            --dirichlet_alpha $ALPHA --seed $SEED \
-            --no_shapley \
-            --selection_method ucb \
-            --ucb_c 1.0 \
-            $DP_ARGS \
-            --output_folder $OUTPUT_FOLDER
+    echo "[4/6] UCB"
+    python federated_main.py \
+        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
+        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
+        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
+        --dirichlet_alpha $ALPHA --seed $SEED \
+        --no_shapley \
+        --selection_method ucb \
+        --ucb_c 1.0 \
+        $DP_ARGS \
+        --output_folder $OUTPUT_FOLDER
 
-        echo "[5/5] FedProx"
-        python federated_main.py \
-            --dataset $DATASET --model $MODEL --epochs $EPOCHS \
-            --num_users $NUM_USERS --num_selected $NUM_SELECTED \
-            --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
-            --dirichlet_alpha $ALPHA --seed $SEED \
-            --no_shapley \
-            --selection_method random \
-            --use_fedprox \
-            --fedprox_mu 0.01 \
-            $DP_ARGS \
-            --output_folder $OUTPUT_FOLDER
-    done
+    echo "[5/6] FedProx (mu=0.01)"
+    python federated_main.py \
+        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
+        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
+        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
+        --dirichlet_alpha $ALPHA --seed $SEED \
+        --no_shapley \
+        --selection_method random \
+        --use_fedprox \
+        --fedprox_mu 0.01 \
+        $DP_ARGS \
+        --output_folder $OUTPUT_FOLDER
+
+    echo "[6/6] FedCS (deadline=${FEDCS_DEADLINE})"
+    python federated_main.py \
+        --dataset $DATASET --model $MODEL --epochs $EPOCHS \
+        --num_users $NUM_USERS --num_selected $NUM_SELECTED \
+        --local_ep $LOCAL_EP --local_bs $LOCAL_BS --lr $LR \
+        --dirichlet_alpha $ALPHA --seed $SEED \
+        --no_shapley \
+        --selection_method fedcs \
+        --fedcs_deadline $FEDCS_DEADLINE \
+        --use_energy \
+        --sigma_squared 1.0 \
+        --initial_energy 500.0 \
+        --energy_threshold 50.0 \
+        $DP_ARGS \
+        --output_folder $OUTPUT_FOLDER
 done
 
 echo ""

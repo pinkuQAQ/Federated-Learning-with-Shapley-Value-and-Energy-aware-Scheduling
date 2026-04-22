@@ -52,12 +52,14 @@ def args_parser():
     parser.add_argument('--no_shapley', action='store_false', default=True, dest='use_shapley',
                         help='disable Shapley-based client selection (default: use Shapley)')
     parser.add_argument('--selection_method', type=str, default='hybrid',
-                        choices=['random', 'round_robin', 'greedy', 'hybrid', 'poc', 'ucb'],
+                        choices=['random', 'round_robin', 'greedy', 'hybrid', 'poc', 'ucb', 'fedcs'],
                         help='client selection method')
     parser.add_argument('--poc_candidate_size', type=int, default=None,
                         help='Power of Choice candidate pool size (d), default: num_selected * 2')
     parser.add_argument('--poc_decay_rate', type=float, default=0.9,
                         help='Power of Choice loss decay rate (default: 0.9)')
+    parser.add_argument('--fedcs_deadline', type=float, default=5.0,
+                        help='FedCS per-round deadline (J, taken as energy proxy for completion time)')
 
     # Shapley计算参数
     parser.add_argument('--shapley_epsilon', type=float, default=0.01,

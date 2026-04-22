@@ -30,7 +30,7 @@ from shapley import MCShapley
 from selection import (hybrid_selection, random_selection, round_robin_selection,
                        greedy_shapley_selection, energy_aware_selection,
                        hybrid_energy_aware_selection, power_of_choice_selection,
-                       ucb_selection)
+                       ucb_selection, fedcs_selection)
 from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
 
@@ -185,6 +185,30 @@ def select_clients(args, epoch, num_selected, initial_rounds,
                 num_selected=num_selected,
                 candidate_size=args.poc_candidate_size,
                 available_clients=available_clients,
+            )
+        if args.selection_method == 'fedcs':
+            # FedCS：用 (E_trans + E_comp) 作为完成时间代理，按 deadline 贪心接纳
+            client_data_sizes = None
+            if user_groups is not None:
+                client_data_sizes = np.array(
+                    [len(user_groups[uid]) for uid in range(args.num_users)],
+                    dtype=np.float64,
+                )
+            if energy_manager is not None and energy_manager.channel_gains is not None:
+                per_round_energy = energy_manager.compute_energy_consumption(
+                    energy_manager.channel_gains,
+                    selected_clients=None,
+                    client_data_sizes=client_data_sizes,
+                )
+            else:
+                # 退化：无能量管理器时用均匀代价（FedCS 退化为 random-ish）
+                per_round_energy = np.ones(args.num_users, dtype=np.float64)
+            pool = available_clients if available_clients is not None else list(range(args.num_users))
+            return fedcs_selection(
+                per_client_cost=np.asarray(per_round_energy, dtype=np.float64),
+                num_selected=num_selected,
+                deadline=args.fedcs_deadline,
+                available_clients=pool,
             )
         if args.use_energy and available_clients and len(available_clients) >= num_selected:
             return np.random.choice(available_clients, num_selected, replace=False).tolist()
