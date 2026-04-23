@@ -9,12 +9,12 @@
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_abla_ms_%j.err
 
 # =============================================================================
-# Task:  Ablation — CIFAR-10, α=0.1, 3 seeds, 4 variants, 80 epochs
+# Task:  Ablation — CIFAR-10, α=0.1, 3 seeds, 4 variants, 100 epochs
 # Seeds: 42, 123, 2024
 # Variants: Full (SV+Lyap+Energy), w/o SV, w/o Lyap, w/o Energy
 # Removed: "w/o LDP" — upload perturbation is no longer a headline contribution,
 #   so the LDP-on-vs-off sweep is reported in the σ_dp sensitivity script instead.
-# Expect ~30 min/run × 3 seeds × 4 variants ≈ 6 h
+# Expect ~35 min/run × 3 seeds × 4 variants ≈ 7 h
 # =============================================================================
 
 echo "========================================"
@@ -34,7 +34,7 @@ mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 DATASET=cifar
 MODEL=cnn
-EPOCHS=80
+EPOCHS=100
 NUM_USERS=100
 NUM_SELECTED=10
 LOCAL_EP=2
@@ -47,7 +47,7 @@ DP_CLIP_NORM=1.0
 DP_NOISE_MULTIPLIER=0.01
 DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
 
-RUN_TAG="${RUN_TAG:-$(date +%Y%m%d)}"
+RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
 for SEED in "${SEEDS[@]}"; do
     OUTPUT_FOLDER="ablation_3seed_a${ALPHA}_seed${SEED}_${RUN_TAG}"

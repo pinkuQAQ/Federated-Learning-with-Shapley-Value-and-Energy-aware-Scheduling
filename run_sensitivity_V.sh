@@ -30,7 +30,7 @@ mkdir -p /data/home/zhaozhanshan/FLSV/save
 # 共享参数（与消融实验保持一致）
 DATASET=cifar
 MODEL=cnn
-EPOCHS=80
+EPOCHS=100
 NUM_USERS=100
 NUM_SELECTED=10
 LOCAL_EP=2

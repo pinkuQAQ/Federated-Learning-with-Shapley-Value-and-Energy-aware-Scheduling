@@ -9,11 +9,11 @@
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_cifar_ms_%j.err
 
 # =============================================================================
-# Task:  Main table — CIFAR-10, α=0.1, 3 seeds, 6 methods, 80 epochs
+# Task:  Main table — CIFAR-10, α=0.1, 3 seeds, 6 methods, 100 epochs
 # Seeds: 42, 123, 2024
 # Methods: Ours, FedAvg, PoC, UCB, FedProx, FedCS
 # σ_dp:  0.01  (post-LDP-review default; σ=0.05 kills accuracy; σ=0 is also reported)
-# Expect ~35 min/run × 3 × 6 = ~11 h per σ config. Two σ configs ⇒ ~22 h.
+# Expect ~40 min/run × 3 × 6 = ~12 h
 # =============================================================================
 
 echo "========================================"
@@ -33,7 +33,7 @@ mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 DATASET=cifar
 MODEL=cnn
-EPOCHS=80
+EPOCHS=100
 NUM_USERS=100
 NUM_SELECTED=10
 LOCAL_EP=2
@@ -50,7 +50,7 @@ DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_N
 # FedCS deadline calibrated against σ_ch²=1.0 + default compute cost
 FEDCS_DEADLINE=5.0
 
-RUN_TAG="${RUN_TAG:-$(date +%Y%m%d)}"
+RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
 for SEED in "${SEEDS[@]}"; do
     OUTPUT_FOLDER="main_3seed_a${ALPHA}_sigma${DP_NOISE_MULTIPLIER}_seed${SEED}_${RUN_TAG}"

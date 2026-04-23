@@ -11,9 +11,9 @@
 # =============================================================================
 # Task:  Energy stress — tight budget configuration so Lyapunov queue truly binds
 # Setup: E_init=100 (vs default 500), E_threshold=10, same 6 methods, 1 seed,
-#        α=0.1, 80 epochs. Purpose: show that at a tight budget some baselines
+#        α=0.1, 100 epochs. Purpose: show that at a tight budget some baselines
 #        start depleting clients while Ours keeps participation balanced.
-# Expect ~30 min/run × 6 methods ≈ 3 h
+# Expect ~35 min/run × 6 methods ≈ 3.5 h
 # =============================================================================
 
 echo "========================================"
@@ -33,7 +33,7 @@ mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 DATASET=cifar
 MODEL=cnn
-EPOCHS=80
+EPOCHS=100
 NUM_USERS=100
 NUM_SELECTED=10
 LOCAL_EP=2
@@ -51,7 +51,7 @@ DP_CLIP_NORM=1.0
 DP_NOISE_MULTIPLIER=0.01
 DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
 FEDCS_DEADLINE=5.0
-RUN_TAG="${RUN_TAG:-$(date +%Y%m%d)}"
+RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 OUTPUT_FOLDER="stress_e${INITIAL_ENERGY}_a${ALPHA}_seed${SEED}_${RUN_TAG}"
 
 echo ""

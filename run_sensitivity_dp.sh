@@ -29,7 +29,7 @@ mkdir -p /data/home/zhaozhanshan/FLSV/save
 
 DATASET=cifar
 MODEL=cnn
-EPOCHS=80
+EPOCHS=100
 NUM_USERS=100
 NUM_SELECTED=10
 LOCAL_EP=2
