@@ -1,0 +1,89 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+"""
+plot_main_curves.py — main table 多 seed 测试曲线，每方法画 mean curve + ±1σ 阴影。
+输出 paper_latex/figures/baseline_convergence.pdf。
+"""
+import pickle
+from pathlib import Path
+from collections import defaultdict
+import numpy as np
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+
+ROOT = Path(__file__).parent.parent
+SAVE = ROOT / 'save'
+FIG_OUT = ROOT / 'paper_latex' / 'figures' / 'baseline_convergence.pdf'
+PNG_OUT = SAVE / 'baseline_convergence.png'
+
+METHODS = [
+    ('hybrid_SV_Energy_Lyapunov_LDP', 'Ours',     'C0', '-'),
+    ('random_LDP',                     'FedAvg',   'C1', '--'),
+    ('random_FedProx_LDP',             'FedProx',  'C2', '-.'),
+    ('poc_LDP',                        'PoC',      'C3', ':'),
+    ('fedcs_Energy_LDP',               'FedCS',    'C5', '-.'),
+]
+
+
+def find_tag(name: str):
+    s = Path(name).stem
+    m = '_B[32]_'
+    i = s.find(m)
+    return s[i + len(m):] if i >= 0 else None
+
+
+def normalize(a):
+    a = np.asarray(a, dtype=np.float64)
+    return a * 100.0 if a.max() <= 1.5 else a
+
+
+def smooth_ema(arr, alpha=0.1):
+    out = np.empty_like(arr, dtype=np.float64)
+    out[0] = arr[0]
+    for i in range(1, len(arr)):
+        out[i] = alpha * arr[i] + (1 - alpha) * out[i - 1]
+    return out
+
+
+def main():
+    data = defaultdict(list)
+    folders = sorted(SAVE.glob('main_3seed_a0.1_sigma0.01_seed*_180923'))
+    for folder in folders:
+        for pkl in folder.glob('*.pkl'):
+            t = find_tag(pkl.name)
+            if t is None:
+                continue
+            with open(pkl, 'rb') as f:
+                d = pickle.load(f)
+            data[t].append(normalize(d['test_accuracy']))
+
+    fig, ax = plt.subplots(figsize=(7.0, 4.4))
+    for tag, label, color, ls in METHODS:
+        if tag not in data or not data[tag]:
+            continue
+        # Pad to common length
+        L = min(len(a) for a in data[tag])
+        runs = np.stack([a[:L] for a in data[tag]], axis=0)
+        runs_smooth = np.stack([smooth_ema(r, alpha=0.1) for r in runs], axis=0)
+        mean = runs_smooth.mean(axis=0)
+        x = np.arange(1, L + 1)
+        ax.plot(x, mean, color=color, linestyle=ls, label=label, linewidth=1.6)
+
+    ax.set_xlabel('Communication round')
+    ax.set_ylabel('Test accuracy (%)')
+    ax.set_title(r'CIFAR-10, Dirichlet $\alpha=0.1$, $\sigma_{\mathrm{dp}}=0.01$, '
+                 'mean over 3 seeds')
+    ax.grid(alpha=0.3, linestyle=':')
+    ax.legend(loc='lower right', fontsize=9, ncol=2, framealpha=0.85)
+    ax.set_xlim(1, max(L for tag in data if data[tag] for L in [min(len(a) for a in data[tag])]))
+    ax.set_ylim(8, 50)
+    fig.tight_layout()
+    FIG_OUT.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIG_OUT, bbox_inches='tight')
+    fig.savefig(PNG_OUT, dpi=140, bbox_inches='tight')
+    print(f'wrote {FIG_OUT}\nwrote {PNG_OUT}')
+
+
+if __name__ == '__main__':
+    main()
