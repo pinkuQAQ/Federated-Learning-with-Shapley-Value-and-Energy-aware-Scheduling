@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).parent.parent
 SAVE = ROOT / 'save'
-FIG_OUT = ROOT / 'paper_latex' / 'figures' / 'ablation_curves.pdf'
+FIG_OUT = ROOT / 'latex' / 'figures' / 'ablation_curves.pdf'
 PNG_OUT = SAVE / 'ablation_curves.png'
 
 VARIANTS = [

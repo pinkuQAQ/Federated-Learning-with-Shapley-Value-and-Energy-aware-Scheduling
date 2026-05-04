@@ -28,5 +28,5 @@ env/
 Thumbs.db
 
 # 论文相关（不公开）
-paper_latex/
+latex/
 paper_outline_IEEE.md

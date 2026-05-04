@@ -16,6 +16,7 @@ import time
 import pickle
 import shutil
 import numpy as np
+import math
 from tqdm import tqdm
 
 import torch
@@ -111,7 +112,7 @@ def _get_client_data_sizes(user_groups, num_users):
 
 def _apply_local_dp(global_state, local_state, args):
     """Clip and perturb a client's model update before upload."""
-    if not args.use_local_dp:
+    if getattr(args, 'privacy_mode', 'none') != 'local':
         return copy.deepcopy(local_state), {
             'pre_clip_norm': 0.0,
             'post_clip_norm': 0.0,
@@ -151,6 +152,83 @@ def _apply_local_dp(global_state, local_state, args):
         'clip_factor': clip_factor,
         'noise_std': noise_std,
     }
+
+
+def _clip_client_update(global_state, local_state, clip_norm):
+    """Clip one client update and return the clipped local model."""
+    clip_norm = max(float(clip_norm), 1e-12)
+    total_sq_norm = 0.0
+    for key, local_tensor in local_state.items():
+        global_tensor = global_state[key].to(local_tensor.device)
+        if torch.is_floating_point(local_tensor):
+            delta = (local_tensor - global_tensor).float()
+            total_sq_norm += torch.sum(delta * delta).item()
+
+    pre_clip_norm = total_sq_norm ** 0.5
+    clip_factor = min(1.0, clip_norm / (pre_clip_norm + 1e-12)) if pre_clip_norm > 0 else 1.0
+
+    clipped_state = copy.deepcopy(local_state)
+    for key, local_tensor in local_state.items():
+        global_tensor = global_state[key].to(local_tensor.device)
+        if not torch.is_floating_point(local_tensor):
+            clipped_state[key] = local_tensor.clone()
+            continue
+        delta = (local_tensor - global_tensor).float() * clip_factor
+        clipped_state[key] = (global_tensor.float() + delta).to(local_tensor.dtype)
+
+    return clipped_state, {
+        'pre_clip_norm': pre_clip_norm,
+        'post_clip_norm': pre_clip_norm * clip_factor,
+        'clip_factor': clip_factor,
+        'noise_std': 0.0,
+    }
+
+
+def _add_central_dp_noise(global_state, averaged_state, args, selected_count):
+    """Add central-DP Gaussian noise to the aggregated update."""
+    clip_norm = max(float(args.dp_clip_norm), 1e-12)
+    selected_count = max(int(selected_count), 1)
+    noise_std = float(args.dp_noise_multiplier) * clip_norm / selected_count
+
+    noised_state = copy.deepcopy(averaged_state)
+    noise_sq_norm = 0.0
+    for key, avg_tensor in averaged_state.items():
+        if not torch.is_floating_point(avg_tensor):
+            noised_state[key] = avg_tensor.clone()
+            continue
+        noise = torch.randn_like(avg_tensor.float()) * noise_std
+        noised_state[key] = (avg_tensor.float() + noise).to(avg_tensor.dtype)
+        noise_sq_norm += torch.sum(noise * noise).item()
+
+    return noised_state, {
+        'noise_std': noise_std,
+        'noise_norm': noise_sq_norm ** 0.5,
+    }
+
+
+def _compute_dp_epsilon(noise_multiplier, sample_rate, rounds, delta):
+    """RDP accountant for the subsampled Gaussian mechanism."""
+    sigma = float(noise_multiplier)
+    if sigma <= 0:
+        return float('inf')
+    q = min(max(float(sample_rate), 1e-12), 1.0)
+    orders = [2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 24, 32, 48, 64, 96, 128]
+    best_eps = float('inf')
+    for alpha in orders:
+        log_terms = []
+        for k in range(alpha + 1):
+            log_binom = math.lgamma(alpha + 1) - math.lgamma(k + 1) - math.lgamma(alpha - k + 1)
+            log_terms.append(
+                log_binom
+                + k * math.log(max(q, 1e-300))
+                + (alpha - k) * math.log(max(1.0 - q, 1e-300))
+                + (k * k - k) / (2.0 * sigma * sigma)
+            )
+        max_log = max(log_terms)
+        rdp_round = (max_log + math.log(sum(math.exp(v - max_log) for v in log_terms))) / (alpha - 1)
+        eps = rounds * rdp_round + math.log(1.0 / float(delta)) / (alpha - 1)
+        best_eps = min(best_eps, eps)
+    return best_eps
 
 
 def select_clients(args, epoch, num_selected, initial_rounds,
@@ -396,9 +474,12 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
                 else:
                     shapley_values[client_id] = new_sv
             elif args.shapley_update_method == 'exponential':
+                alpha = args.shapley_alpha
+                if getattr(args, 'privacy_mode', 'none') == 'local':
+                    alpha = max(alpha, getattr(args, 'dp_shapley_alpha', alpha))
                 shapley_values[client_id] = (
-                    args.shapley_alpha * shapley_values[client_id] +
-                    (1 - args.shapley_alpha) * new_sv
+                    alpha * shapley_values[client_id] +
+                    (1 - alpha) * new_sv
                 )
             elif args.shapley_update_method == 'recent':
                 shapley_values[client_id] = new_sv
@@ -428,6 +509,15 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                  dp_round_history=None, shapley_time_history=None):
     """保存实验结果"""
     os.makedirs(exp_folder, exist_ok=True)
+    privacy_mode = getattr(args, 'privacy_mode', 'none')
+    dp_epsilon = None
+    if privacy_mode in ('local', 'central'):
+        dp_epsilon = _compute_dp_epsilon(
+            args.dp_noise_multiplier,
+            num_selected / float(args.num_users),
+            args.epochs,
+            args.dp_delta
+        )
 
     # 生成方法后缀
     if args.use_shapley:
@@ -442,8 +532,10 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         method_suffix += "_Lyapunov"
     if args.use_fedprox:
         method_suffix += "_FedProx"
-    if args.use_local_dp:
+    if privacy_mode == 'local':
         method_suffix += "_LDP"
+    elif privacy_mode == 'central':
+        method_suffix += "_CDP"
 
     file_name = f'{exp_folder}/{args.dataset}_{args.model}_{args.epochs}_' \
                 f'C[{num_selected}]_iid[{1 if args.iid else 0}]_E[{args.local_ep}]_' \
@@ -489,11 +581,15 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             'ucb_counts': ucb_counts,
         })
 
-    if args.use_local_dp:
+    if privacy_mode in ('local', 'central'):
         save_data.update({
             'dp_statistics': {
+                'privacy_mode': privacy_mode,
                 'clip_norm': args.dp_clip_norm,
                 'noise_multiplier': args.dp_noise_multiplier,
+                'delta': args.dp_delta,
+                'epsilon': dp_epsilon,
+                'sampling_rate': num_selected / float(args.num_users),
             },
             'dp_round_history': dp_round_history or [],
         })
@@ -554,11 +650,13 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 else:
                     f.write(f"- Shapley权重: {args.shapley_weight}\n")
                     f.write(f"- 能量权重: {args.energy_weight}\n")
-            f.write(f"\n## Local Differential Privacy\n\n")
-            f.write(f"- 使用Local DP: {args.use_local_dp}\n")
-            if args.use_local_dp:
+            f.write(f"\n## Privacy Module\n\n")
+            f.write(f"- Privacy mode: {privacy_mode}\n")
+            if privacy_mode in ('local', 'central'):
                 f.write(f"- 裁剪阈值 C: {args.dp_clip_norm}\n")
                 f.write(f"- 噪声乘子 sigma_dp: {args.dp_noise_multiplier}\n")
+                f.write(f"- delta: {args.dp_delta}\n")
+                f.write(f"- epsilon_priv: {dp_epsilon:.4f}\n")
             f.write(f"\n## 实验结果\n\n")
             f.write(f"- 最终测试准确率: {test_acc * 100:.2f}%\n")
             f.write(f"- 总运行时间: {time.time() - start_time:.2f}秒\n")
@@ -727,12 +825,20 @@ if __name__ == '__main__':
         print(f"启用 FedProx 近端项 (μ={args.fedprox_mu})")
         print("=" * 60 + "\n")
 
-    # ============= Local DP 初始化 =============
-    if args.use_local_dp:
+    # ============= Privacy module 初始化 =============
+    privacy_mode = getattr(args, 'privacy_mode', 'none')
+    if privacy_mode in ('local', 'central'):
+        eps_priv = _compute_dp_epsilon(
+            args.dp_noise_multiplier,
+            num_selected / float(args.num_users),
+            args.epochs,
+            args.dp_delta
+        )
         print("\n" + "=" * 60)
-        print("启用客户端 Local DP 上传机制")
+        print(f"启用隐私保护模块: {privacy_mode}")
         print(f"裁剪阈值 C: {args.dp_clip_norm}")
         print(f"噪声乘子 sigma_dp: {args.dp_noise_multiplier}")
+        print(f"隐私预算: epsilon_priv={eps_priv:.4f}, delta={args.dp_delta}")
         print("=" * 60 + "\n")
 
     # 记录每个客户端的本地损失
@@ -830,7 +936,10 @@ if __name__ == '__main__':
                                           idxs=user_groups[idx], logger=logger, device=device)
             w, loss, actual_samples = local_model.update_weights(
                 model=copy.deepcopy(global_model), global_round=epoch)
-            w, dp_stats = _apply_local_dp(global_weights, w, args)
+            if getattr(args, 'privacy_mode', 'none') == 'central':
+                w, dp_stats = _clip_client_update(global_weights, w, args.dp_clip_norm)
+            else:
+                w, dp_stats = _apply_local_dp(global_weights, w, args)
 
             # 只做一次deepcopy，共享引用以减少内存开销
             w_copy = copy.deepcopy(w)
@@ -841,10 +950,11 @@ if __name__ == '__main__':
             local_losses.append(copy.deepcopy(loss))
             client_local_losses[idx] = loss
 
-            if args.use_local_dp:
+            if getattr(args, 'privacy_mode', 'none') in ('local', 'central'):
                 dp_round_history.append({
                     'round': epoch,
                     'client': int(idx),
+                    'mode': getattr(args, 'privacy_mode', 'none'),
                     'pre_clip_norm': dp_stats['pre_clip_norm'],
                     'post_clip_norm': dp_stats['post_clip_norm'],
                     'clip_factor': dp_stats['clip_factor'],
@@ -880,6 +990,23 @@ if __name__ == '__main__':
             client_data_sizes.append(int(data_size))
 
         global_weights = average_weights(local_weights, client_data_sizes)
+        if getattr(args, 'privacy_mode', 'none') == 'central':
+            global_weights, central_dp_stats = _add_central_dp_noise(
+                previous_global_model if args.use_shapley else global_model.state_dict(),
+                global_weights,
+                args,
+                len(idxs_users)
+            )
+            dp_round_history.append({
+                'round': epoch,
+                'client': -1,
+                'mode': 'central_aggregate',
+                'pre_clip_norm': 0.0,
+                'post_clip_norm': 0.0,
+                'clip_factor': 1.0,
+                'noise_std': central_dp_stats['noise_std'],
+                'noise_norm': central_dp_stats['noise_norm'],
+            })
         global_model.load_state_dict(global_weights)
 
         # ============= UCB 奖励更新 =============
@@ -1064,13 +1191,16 @@ if __name__ == '__main__':
         lyap_viz_path = f'{exp_folder}/lyapunov_{args.dataset}_{timestamp}.png'
         lyapunov_optimizer.visualize_optimization(lyap_viz_path)
 
-    if args.use_local_dp and dp_round_history:
-        clip_factors = [item['clip_factor'] for item in dp_round_history]
-        pre_clip_norms = [item['pre_clip_norm'] for item in dp_round_history]
-        print(f"\nLocal DP统计:")
-        print(f"  平均更新范数(裁剪前): {np.mean(pre_clip_norms):.4f}")
-        print(f"  平均裁剪系数: {np.mean(clip_factors):.4f}")
+    if privacy_mode in ('local', 'central') and dp_round_history:
+        client_dp_items = [item for item in dp_round_history if item.get('client', -1) >= 0]
+        clip_factors = [item['clip_factor'] for item in client_dp_items]
+        pre_clip_norms = [item['pre_clip_norm'] for item in client_dp_items]
+        print(f"\nPrivacy module统计:")
+        if pre_clip_norms:
+            print(f"  平均更新范数(裁剪前): {np.mean(pre_clip_norms):.4f}")
+            print(f"  平均裁剪系数: {np.mean(clip_factors):.4f}")
         print(f"  噪声乘子 sigma_dp: {args.dp_noise_multiplier:.4f}")
+        print(f"  epsilon_priv: {_compute_dp_epsilon(args.dp_noise_multiplier, num_selected / float(args.num_users), args.epochs, args.dp_delta):.4f}")
 
     print(f"总运行时间: {time.time() - start_time:.2f}秒")
     print(f"{'=' * 60}")

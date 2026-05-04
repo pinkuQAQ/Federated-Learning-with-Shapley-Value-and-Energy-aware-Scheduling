@@ -21,7 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 ROOT = Path(__file__).resolve().parents[1]
 SAVE_DIR = ROOT / "save"
-OUTPUT_DIR = ROOT / "paper_latex" / "figures"
+OUTPUT_DIR = ROOT / "latex" / "figures"
 
 ABLATION_DIR = SAVE_DIR / "ablation_20260330_181547"
 V_DIRS = {

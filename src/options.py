@@ -123,13 +123,20 @@ def args_parser():
                         help='FedProx proximal term coefficient μ (default: 0.01)')
     # ================================================
 
-    # ============= Local DP 参数 =============
+    # ============= 隐私保护参数 =============
+    parser.add_argument('--privacy_mode', type=str, default='none',
+                        choices=['none', 'local', 'central'],
+                        help='privacy module: none, local client-side DP, or central DP after aggregation')
     parser.add_argument('--use_local_dp', action='store_true', default=False,
-                        help='enable client-side local differential privacy before upload')
+                        help='legacy alias for --privacy_mode local')
     parser.add_argument('--dp_clip_norm', type=float, default=1.0,
-                        help='L2 clipping norm C for local model updates')
+                        help='L2 clipping norm C for model updates')
     parser.add_argument('--dp_noise_multiplier', type=float, default=0.05,
-                        help='Gaussian noise multiplier sigma_dp for local DP')
+                        help='Gaussian noise multiplier sigma_dp for DP')
+    parser.add_argument('--dp_delta', type=float, default=1e-5,
+                        help='target delta for approximate DP accounting')
+    parser.add_argument('--dp_shapley_alpha', type=float, default=0.9,
+                        help='EMA smoothing parameter for Shapley updates under local DP')
     # ================================================
 
     # ============= 计算能量参数 =============
@@ -142,4 +149,7 @@ def args_parser():
     # ================================================
 
     args = parser.parse_args()
+    if args.use_local_dp:
+        args.privacy_mode = 'local'
+    args.use_local_dp = args.privacy_mode == 'local'
     return args

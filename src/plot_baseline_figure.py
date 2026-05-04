@@ -15,7 +15,7 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_DIR = ROOT / "save" / "noniid_cmp_alpha0.25_20260320"
-OUTPUT_DIR = ROOT / "paper_latex" / "figures"
+OUTPUT_DIR = ROOT / "latex" / "figures"
 EMA_ALPHA = 0.1
 
 METHOD_STYLES = {

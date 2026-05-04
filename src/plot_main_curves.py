@@ -14,7 +14,7 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).parent.parent
 SAVE = ROOT / 'save'
-FIG_OUT = ROOT / 'paper_latex' / 'figures' / 'baseline_convergence.pdf'
+FIG_OUT = ROOT / 'latex' / 'figures' / 'baseline_convergence.pdf'
 PNG_OUT = SAVE / 'baseline_convergence.png'
 
 METHODS = [

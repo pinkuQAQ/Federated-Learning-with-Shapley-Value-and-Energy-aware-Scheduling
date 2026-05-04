@@ -1,26 +1,22 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-plot_privacy_utility.py — σ_dp ↔ accuracy ↔ (ε, δ) 三栏图。
-左轴：last-5 accuracy；右轴：log10(ε) 在 δ=1e-5 下的 RDP→DP 转换。
-输出 paper_latex/figures/privacy_utility.pdf
-"""
-import math
+"""Plot the utility effect of optional upload perturbation."""
+
 import pickle
+import math
 from pathlib import Path
-import numpy as np
+
 import matplotlib
-matplotlib.use('Agg')
+import numpy as np
+
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-ROOT = Path(__file__).parent.parent
-SAVE = ROOT / 'save'
-FIG_OUT = ROOT / 'paper_latex' / 'figures' / 'privacy_utility.pdf'
-PNG_OUT = SAVE / 'privacy_utility.png'
 
-import sys
-sys.path.insert(0, str(ROOT / 'src'))
-from compute_privacy import compute_total_epsilon
+ROOT = Path(__file__).parent.parent
+SAVE = ROOT / "save"
+FIG_OUT = ROOT / "latex" / "figures" / "privacy_utility.pdf"
+PNG_OUT = SAVE / "privacy_utility.png"
 
 
 def normalize(a):
@@ -28,68 +24,94 @@ def normalize(a):
     return a * 100.0 if a.max() <= 1.5 else a
 
 
+def compute_epsilon(sigma, q=0.1, rounds=100, delta=1e-5):
+    if sigma <= 0:
+        return float("inf")
+    orders = [2, 3, 4, 5, 6, 7, 8, 10, 12, 16, 24, 32, 48, 64, 96, 128]
+    best = float("inf")
+    for alpha in orders:
+        terms = []
+        for k in range(alpha + 1):
+            log_binom = math.lgamma(alpha + 1) - math.lgamma(k + 1) - math.lgamma(alpha - k + 1)
+            terms.append(
+                log_binom
+                + k * math.log(max(q, 1e-300))
+                + (alpha - k) * math.log(max(1.0 - q, 1e-300))
+                + (k * k - k) / (2.0 * sigma * sigma)
+            )
+        m = max(terms)
+        rdp = (m + math.log(sum(math.exp(v - m) for v in terms))) / (alpha - 1)
+        best = min(best, rounds * rdp + math.log(1.0 / delta) / (alpha - 1))
+    return best
+
+
+def eps_label(eps):
+    if math.isinf(eps):
+        return r"$\infty$"
+    if eps >= 1000:
+        return f"{eps:.1e}"
+    return f"{eps:.1f}"
+
+
 def main():
     sigmas = [0.0, 0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
+    epsilons = [compute_epsilon(s) for s in sigmas]
     last5 = []
-    for s in sigmas:
-        folders = sorted(SAVE.glob(f'sens_dp_sigma{s}_*'))
+
+    for sigma in sigmas:
+        folders = sorted(SAVE.glob(f"sens_dp_sigma{sigma}_*"))
         if not folders:
-            last5.append(np.nan); continue
-        pkls = list(folders[-1].glob('*.pkl'))
+            last5.append(np.nan)
+            continue
+
+        pkls = list(folders[-1].glob("*.pkl"))
         if not pkls:
-            last5.append(np.nan); continue
-        with open(pkls[0], 'rb') as f:
-            d = pickle.load(f)
-        a = normalize(d['test_accuracy'])
-        last5.append(a[-5:].mean())
+            last5.append(np.nan)
+            continue
+
+        with open(pkls[0], "rb") as f:
+            data = pickle.load(f)
+        acc = normalize(data["test_accuracy"])
+        last5.append(acc[-5:].mean())
+
     last5 = np.array(last5)
 
-    # ε(σ) at q=0.1, T=100, δ=1e-5
-    epsilons = []
-    for s in sigmas:
-        if s <= 0:
-            epsilons.append(float('inf'))
-        else:
-            epsilons.append(compute_total_epsilon(sigma=s, q=0.1, T=100, delta=1e-5))
-    epsilons = np.array(epsilons)
+    fig, ax = plt.subplots(figsize=(7.0, 4.4))
+    x = np.arange(len(sigmas))
 
-    fig, ax1 = plt.subplots(figsize=(7.0, 4.4))
-    color1 = 'tab:blue'
-    ax1.plot(sigmas, last5, marker='o', color=color1, linewidth=1.8, label='Test acc. (last 5)')
-    ax1.set_xlabel(r'Noise multiplier $\sigma_{\mathrm{dp}}$')
-    ax1.set_ylabel('Test accuracy (%)', color=color1)
-    ax1.tick_params(axis='y', labelcolor=color1)
-    ax1.set_xticks(sigmas)
-    ax1.set_xticklabels([str(s) for s in sigmas])
-    ax1.grid(alpha=0.3, linestyle=':')
-    ax1.set_ylim(0, 55)
+    ax.plot(
+        x,
+        last5,
+        marker="o",
+        color="#2563eb",
+        linewidth=1.9,
+        label="Test acc. (last 5)",
+    )
+    ax.set_xlabel(r"Noise multiplier $\sigma_{\mathrm{dp}}$ / privacy budget $\varepsilon_{\mathrm{priv}}$")
+    ax.set_ylabel("Test accuracy (%)")
+    ax.set_xticks(x)
+    ax.set_xticklabels([f"{s}\n{eps_label(e)}" for s, e in zip(sigmas, epsilons)])
+    ax.set_ylim(0, 55)
+    ax.grid(alpha=0.3, linestyle=":")
+    ax.legend(loc="upper right", frameon=False)
 
-    ax2 = ax1.twinx()
-    color2 = 'tab:red'
-    finite_eps = [e if not math.isinf(e) else None for e in epsilons]
-    plot_eps = [e if e is not None else np.nan for e in finite_eps]
-    ax2.semilogy([s for s in sigmas if s > 0], [e for e in plot_eps[1:]],
-                 marker='s', color=color2, linewidth=1.5, linestyle='--',
-                 label=r'$\varepsilon$ (Gaussian, $\delta=10^{-5}$)')
-    ax2.set_ylabel(r'$\varepsilon$ at $\delta=10^{-5}$ (log scale)', color=color2)
-    ax2.tick_params(axis='y', labelcolor=color2)
-    ax2.axhline(10, color=color2, linestyle=':', alpha=0.5)
-    ax2.text(0.97, 11, r'$\varepsilon=10$ (loose)', color=color2, fontsize=8, ha='right')
-
-    fig.suptitle('Noise vs. utility on CIFAR-10, '
-                 r'$\alpha=0.1$, $V=10$, $T=100$, $q=K/N=0.1$, single seed=42')
+    fig.suptitle(
+        "Privacy-utility tradeoff on CIFAR-10, "
+        r"$\alpha=0.1$, $V=10$, $T=100$, $\delta=10^{-5}$"
+    )
     fig.tight_layout()
+
     FIG_OUT.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(FIG_OUT, bbox_inches='tight')
-    fig.savefig(PNG_OUT, dpi=140, bbox_inches='tight')
+    SAVE.mkdir(parents=True, exist_ok=True)
+    fig.savefig(FIG_OUT, bbox_inches="tight")
+    fig.savefig(PNG_OUT, dpi=140, bbox_inches="tight")
 
-    print(f'wrote {FIG_OUT}\nwrote {PNG_OUT}')
-    print('\n  σ_dp |  acc%  |   ε       ')
-    print('-' * 32)
-    for s, a, e in zip(sigmas, last5, epsilons):
-        es = 'inf' if math.isinf(e) else f'{e:8.2f}'
-        print(f'  {s:>5.2f} | {a:5.2f} | {es}')
+    print(f"wrote {FIG_OUT}\nwrote {PNG_OUT}")
+    print("\n sigma | epsilon_priv | last-5 acc (%)")
+    print("-" * 42)
+    for sigma, eps, acc in zip(sigmas, epsilons, last5):
+        print(f" {sigma:>5.2f} | {eps_label(eps):>12s} | {acc:5.2f}")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()

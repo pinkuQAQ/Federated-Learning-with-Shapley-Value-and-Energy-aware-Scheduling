@@ -9,11 +9,11 @@
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_sens_alpha_%j.err
 
 # =============================================================================
-# Task:  Heterogeneity (Dirichlet α) sensitivity sweep, single seed.
-# Methods: Ours, FedAvg, PoC  (3 methods × 3 α = 9 runs)
-# α: 0.25, 0.5, 1.0  (α=0.1 already covered by main 3-seed table)
-# σ_dp = 0.01, 100 epochs, seed=42 — same operating point as the main table.
-# Expect ~40 min/run × 9 runs ≈ 6 h.
+# Task: Heterogeneity sensitivity sweep, single seed.
+# Methods: Ours, FedAvg, PoC (3 methods x 3 alpha values = 9 runs)
+# alpha: 0.25, 0.5, 1.0 (alpha=0.1 is already covered by the main runs)
+# sigma_dp = 0.01, 100 epochs, seed=42, same operating point as the main table.
+# Expect roughly 40 min/run x 9 runs = about 6 hours.
 # =============================================================================
 
 echo "========================================"

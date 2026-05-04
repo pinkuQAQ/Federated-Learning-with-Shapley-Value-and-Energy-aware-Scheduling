@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 
 ROOT = Path(__file__).parent.parent
 SAVE = ROOT / 'save'
-FIG_OUT = ROOT / 'paper_latex' / 'figures' / 'sensitivity_V.pdf'
+FIG_OUT = ROOT / 'latex' / 'figures' / 'sensitivity_V.pdf'
 PNG_OUT = SAVE / 'sensitivity_V.png'
 
 
