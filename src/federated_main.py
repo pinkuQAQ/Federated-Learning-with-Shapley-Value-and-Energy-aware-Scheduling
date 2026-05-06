@@ -411,34 +411,88 @@ def _clip_client_update_layerwise(global_state, local_state, layer_clip_norms, a
     }
 
 
+def _channel_noise_multiplier_for_round(args):
+    """Return the equivalent channel-noise multiplier for this round."""
+    if not getattr(args, 'dp_channel_assisted', False):
+        return 0.0
+    base = max(float(getattr(args, 'dp_channel_noise_multiplier', 0.0)), 0.0)
+    if base <= 0:
+        return 0.0
+    gains = getattr(args, '_current_selected_channel_gains', None)
+    if gains is None or len(gains) == 0:
+        factor = 1.0
+    else:
+        gains = np.asarray(gains, dtype=float)
+        factor = float(np.sqrt(np.mean(1.0 / (gains * gains + 1e-12))))
+    cap = max(float(getattr(args, 'dp_channel_gain_cap', 2.0)), 1e-12)
+    return base * min(factor, cap)
+
+
+def _effective_noise_multipliers(args, target_multiplier):
+    """Split target DP noise into algorithmic and channel-assisted components."""
+    target = max(float(target_multiplier), 0.0)
+    channel = _channel_noise_multiplier_for_round(args)
+    if not getattr(args, 'dp_channel_assisted', False) or channel <= 0:
+        return target, 0.0, target
+    mode = getattr(args, 'dp_channel_mode', 'topup')
+    if mode == 'additive':
+        algorithmic = target
+    else:
+        algorithmic = math.sqrt(max(target * target - channel * channel, 0.0))
+    effective = math.sqrt(algorithmic * algorithmic + channel * channel)
+    return algorithmic, channel, effective
+
+
 def _add_central_dp_noise(global_state, averaged_state, args, selected_count):
     """Add central-DP Gaussian noise to the aggregated update."""
     selected_count = max(int(selected_count), 1)
     layer_mode = getattr(args, 'dp_clip_scope', 'global') == 'layer'
     layer_clip_norms = getattr(args, '_current_dp_layer_clip_norms', {}) if layer_mode else {}
     clip_norm = max(float(getattr(args, '_current_dp_clip_norm', args.dp_clip_norm)), 1e-12)
-    noise_multiplier = float(getattr(args, '_current_dp_noise_multiplier', args.dp_noise_multiplier))
-    default_noise_std = noise_multiplier * clip_norm / selected_count
+    target_multiplier = float(getattr(args, '_current_dp_noise_multiplier', args.dp_noise_multiplier))
+    alg_multiplier, channel_multiplier, effective_multiplier = _effective_noise_multipliers(args, target_multiplier)
+    default_noise_std = effective_multiplier * clip_norm / selected_count
 
     noised_state = copy.deepcopy(averaged_state)
     noise_sq_norm = 0.0
+    alg_noise_sq_norm = 0.0
+    channel_noise_sq_norm = 0.0
     noise_stds = []
+    alg_noise_stds = []
+    channel_noise_stds = []
     for key, avg_tensor in averaged_state.items():
         if not torch.is_floating_point(avg_tensor) or not _is_private_key(args, key, averaged_state):
             noised_state[key] = avg_tensor.clone()
             continue
         key_clip_norm = max(float(layer_clip_norms.get(key, clip_norm)), 1e-12) if layer_mode else clip_norm
-        noise_std = noise_multiplier * key_clip_norm / selected_count
+        alg_std = alg_multiplier * key_clip_norm / selected_count
+        ch_std = channel_multiplier * key_clip_norm / selected_count
+        noise_std = math.sqrt(alg_std * alg_std + ch_std * ch_std)
         noise_stds.append(noise_std)
-        noise = torch.randn_like(avg_tensor.float()) * noise_std
+        alg_noise_stds.append(alg_std)
+        channel_noise_stds.append(ch_std)
+        alg_noise = torch.randn_like(avg_tensor.float()) * alg_std if alg_std > 0 else torch.zeros_like(avg_tensor.float())
+        ch_noise = torch.randn_like(avg_tensor.float()) * ch_std if ch_std > 0 else torch.zeros_like(avg_tensor.float())
+        noise = alg_noise + ch_noise
         noised_state[key] = (avg_tensor.float() + noise).to(avg_tensor.dtype)
         noise_sq_norm += torch.sum(noise * noise).item()
+        alg_noise_sq_norm += torch.sum(alg_noise * alg_noise).item()
+        channel_noise_sq_norm += torch.sum(ch_noise * ch_noise).item()
 
     return noised_state, {
         'clip_norm': clip_norm,
-        'noise_multiplier': noise_multiplier,
+        'noise_multiplier': effective_multiplier,
+        'target_noise_multiplier': target_multiplier,
+        'algorithmic_noise_multiplier': alg_multiplier,
+        'channel_noise_multiplier': channel_multiplier,
+        'channel_assisted': bool(getattr(args, 'dp_channel_assisted', False)),
+        'channel_mode': getattr(args, 'dp_channel_mode', 'topup'),
         'noise_std': float(np.mean(noise_stds)) if noise_stds else default_noise_std,
+        'algorithmic_noise_std': float(np.mean(alg_noise_stds)) if alg_noise_stds else 0.0,
+        'channel_noise_std': float(np.mean(channel_noise_stds)) if channel_noise_stds else 0.0,
         'noise_norm': noise_sq_norm ** 0.5,
+        'algorithmic_noise_norm': alg_noise_sq_norm ** 0.5,
+        'channel_noise_norm': channel_noise_sq_norm ** 0.5,
         'clip_scope': getattr(args, 'dp_clip_scope', 'global'),
         'layer_clip_norms': layer_clip_norms,
     }
@@ -521,6 +575,17 @@ def _compute_configured_dp_epsilon(args, sample_rate):
         sigmas = [_noise_multiplier_for_round(args, t, args.epochs) for t in range(args.epochs)]
         return _compute_dp_epsilon_schedule(sigmas, sample_rate, args.dp_delta)
     return _compute_dp_epsilon(args.dp_noise_multiplier, sample_rate, args.epochs, args.dp_delta)
+
+
+def _compute_observed_dp_epsilon(dp_round_history, sample_rate, delta):
+    sigmas = [
+        float(item.get('noise_multiplier', 0.0))
+        for item in (dp_round_history or [])
+        if int(item.get('client', -1)) < 0 and item.get('mode') == 'central_aggregate'
+    ]
+    if not sigmas:
+        return float('inf')
+    return _compute_dp_epsilon_schedule(sigmas, sample_rate, delta)
 
 
 def _apply_score_dp(score, args):
@@ -910,6 +975,9 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         })
 
     if privacy_mode in ('local', 'central'):
+        sampling_rate = num_selected / float(args.num_users)
+        configured_update_epsilon = _compute_configured_dp_epsilon(args, sampling_rate)
+        observed_update_epsilon = _compute_observed_dp_epsilon(dp_round_history, sampling_rate, args.dp_delta)
         save_data.update({
             'dp_statistics': {
                 'privacy_mode': privacy_mode,
@@ -924,23 +992,26 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 'noise_schedule': getattr(args, 'dp_noise_schedule', 'constant'),
                 'noise_start_multiplier': getattr(args, 'dp_noise_start_multiplier', 1.0),
                 'noise_multiplier': args.dp_noise_multiplier,
+                'channel_assisted': getattr(args, 'dp_channel_assisted', False),
+                'channel_noise_multiplier': getattr(args, 'dp_channel_noise_multiplier', 0.0),
+                'channel_gain_cap': getattr(args, 'dp_channel_gain_cap', None),
+                'channel_mode': getattr(args, 'dp_channel_mode', 'topup'),
                 'score_dp': getattr(args, 'dp_score_dp', False),
                 'score_clip_norm': getattr(args, 'dp_score_clip_norm', None),
                 'score_noise_multiplier': getattr(args, 'dp_score_noise_multiplier', None),
                 'score_epsilon': _compute_dp_epsilon(
                     args.dp_score_noise_multiplier,
-                    num_selected / float(args.num_users),
+                    sampling_rate,
                     args.epochs,
                     args.dp_delta
                 ) if getattr(args, 'dp_score_dp', False) else float('inf'),
-                'update_epsilon': _compute_configured_dp_epsilon(
-                    args,
-                    num_selected / float(args.num_users)
-                ),
+                'configured_update_epsilon': configured_update_epsilon,
+                'observed_update_epsilon': observed_update_epsilon,
+                'update_epsilon': observed_update_epsilon if np.isfinite(observed_update_epsilon) else configured_update_epsilon,
                 'trainable_scope': getattr(args, 'trainable_scope', 'full'),
                 'trainable_only': getattr(args, 'dp_trainable_only', False),
                 'delta': args.dp_delta,
-                'sampling_rate': num_selected / float(args.num_users),
+                'sampling_rate': sampling_rate,
             },
             'dp_round_history': dp_round_history or [],
         })
@@ -1198,6 +1269,9 @@ if __name__ == '__main__':
             print(f"自适应裁剪: percentile={args.dp_clip_percentile}, EMA={args.dp_clip_ema}, "
                   f"scope={args.dp_clip_scope}, range=[{args.dp_min_clip_norm}, {args.dp_max_clip_norm}]")
         print(f"噪声乘子 sigma_dp: {args.dp_noise_multiplier}")
+        if privacy_mode == 'central' and getattr(args, 'dp_channel_assisted', False):
+            print(f"Channel-assisted DP: channel_sigma={args.dp_channel_noise_multiplier}, "
+                  f"mode={args.dp_channel_mode}, gain_cap={args.dp_channel_gain_cap}")
         if getattr(args, 'dp_advanced', False):
             print(f"Advanced CDP: schedule={args.dp_noise_schedule}, start={args.dp_noise_start_multiplier}")
         if getattr(args, 'dp_score_dp', False):
@@ -1417,6 +1491,10 @@ if __name__ == '__main__':
         global_weights = average_weights(local_weights, client_data_sizes)
         if getattr(args, 'privacy_mode', 'none') == 'central':
             args._current_dp_noise_multiplier = _noise_multiplier_for_round(args, epoch, args.epochs)
+            if getattr(args, 'dp_channel_assisted', False) and 'channel_gains' in locals() and channel_gains is not None:
+                args._current_selected_channel_gains = np.asarray(channel_gains)[list(idxs_users)]
+            else:
+                args._current_selected_channel_gains = None
             global_weights, central_dp_stats = _add_central_dp_noise(
                 previous_global_model if args.use_shapley else global_model.state_dict(),
                 global_weights,
@@ -1432,7 +1510,15 @@ if __name__ == '__main__':
                 'clip_factor': 1.0,
                 'noise_std': central_dp_stats['noise_std'],
                 'noise_multiplier': central_dp_stats.get('noise_multiplier', args.dp_noise_multiplier),
+                'target_noise_multiplier': central_dp_stats.get('target_noise_multiplier', args.dp_noise_multiplier),
+                'algorithmic_noise_multiplier': central_dp_stats.get('algorithmic_noise_multiplier', args.dp_noise_multiplier),
+                'channel_noise_multiplier': central_dp_stats.get('channel_noise_multiplier', 0.0),
+                'channel_assisted': central_dp_stats.get('channel_assisted', False),
+                'algorithmic_noise_std': central_dp_stats.get('algorithmic_noise_std', 0.0),
+                'channel_noise_std': central_dp_stats.get('channel_noise_std', 0.0),
                 'noise_norm': central_dp_stats['noise_norm'],
+                'algorithmic_noise_norm': central_dp_stats.get('algorithmic_noise_norm', 0.0),
+                'channel_noise_norm': central_dp_stats.get('channel_noise_norm', 0.0),
                 'clip_norm': central_dp_stats['clip_norm'],
                 'clip_scope': central_dp_stats.get('clip_scope', getattr(args, 'dp_clip_scope', 'global')),
                 'adaptive_clip': bool(getattr(args, 'dp_adaptive_clip', False)),
@@ -1630,6 +1716,15 @@ if __name__ == '__main__':
             print(f"  平均更新范数(裁剪前): {np.mean(pre_clip_norms):.4f}")
             print(f"  平均裁剪系数: {np.mean(clip_factors):.4f}")
         print(f"  噪声乘子 sigma_dp: {args.dp_noise_multiplier:.4f}")
+        aggregate_dp_items = [item for item in dp_round_history if item.get('client', -1) < 0]
+        if aggregate_dp_items and getattr(args, 'dp_channel_assisted', False):
+            eff_sigmas = [item.get('noise_multiplier', 0.0) for item in aggregate_dp_items]
+            alg_sigmas = [item.get('algorithmic_noise_multiplier', 0.0) for item in aggregate_dp_items]
+            ch_sigmas = [item.get('channel_noise_multiplier', 0.0) for item in aggregate_dp_items]
+            obs_eps = _compute_observed_dp_epsilon(dp_round_history, num_selected / float(args.num_users), args.dp_delta)
+            print(f"  Channel-assisted DP: eff_sigma={np.mean(eff_sigmas):.4f}, "
+                  f"alg_sigma={np.mean(alg_sigmas):.4f}, ch_sigma={np.mean(ch_sigmas):.4f}, "
+                  f"epsilon_h={obs_eps:.4f}")
         if getattr(args, 'dp_score_dp', False):
             score_eps = _compute_dp_epsilon(
                 args.dp_score_noise_multiplier,

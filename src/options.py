@@ -168,6 +168,15 @@ def args_parser():
                         help='per-round noise schedule for advanced CDP')
     parser.add_argument('--dp_noise_start_multiplier', type=float, default=0.7,
                         help='initial fraction of dp_noise_multiplier for increasing schedules')
+    parser.add_argument('--dp_channel_assisted', action='store_true', default=False,
+                        help='use channel-noise-assisted lightweight DP aggregation')
+    parser.add_argument('--dp_channel_noise_multiplier', type=float, default=0.0,
+                        help='base channel-noise multiplier contributing to effective DP noise')
+    parser.add_argument('--dp_channel_gain_cap', type=float, default=2.0,
+                        help='cap for channel-noise amplification from selected channel gains')
+    parser.add_argument('--dp_channel_mode', type=str, default='topup',
+                        choices=['topup', 'additive'],
+                        help='topup: algorithmic noise only fills gap to sigma_dp; additive: add both noises')
     parser.add_argument('--dp_score_dp', action='store_true', default=False,
                         help='enable DP perturbation for scalar Shapley contribution scores')
     parser.add_argument('--dp_score_clip_norm', type=float, default=0.05,

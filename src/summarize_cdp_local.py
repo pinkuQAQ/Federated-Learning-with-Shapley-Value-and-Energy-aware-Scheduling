@@ -144,6 +144,8 @@ def summarize_folder(folder):
     aggregate_items = [x for x in history if int(x.get("client", -1)) < 0]
     noise_values = [float(x.get("noise_std", 0.0)) for x in aggregate_items if "noise_std" in x]
     noise_mult_values = [float(x.get("noise_multiplier", sigma)) for x in aggregate_items if "noise_multiplier" in x]
+    alg_mult_values = [float(x.get("algorithmic_noise_multiplier", 0.0)) for x in aggregate_items if "algorithmic_noise_multiplier" in x]
+    ch_mult_values = [float(x.get("channel_noise_multiplier", 0.0)) for x in aggregate_items if "channel_noise_multiplier" in x]
     clip_values = [float(x.get("clip_factor", 1.0)) for x in client_items if "clip_factor" in x]
     clip_norm_values = [float(x.get("clip_norm", 0.0)) for x in client_items if "clip_norm" in x]
 
@@ -160,6 +162,8 @@ def summarize_folder(folder):
         "last3": float(acc[-min(3, len(acc)):].mean()),
         "noise": float(np.mean(noise_values)) if noise_values else 0.0,
         "sigma_avg": float(np.mean(noise_mult_values)) if noise_mult_values else float(sigma),
+        "alg_sigma": float(np.mean(alg_mult_values)) if alg_mult_values else float(sigma),
+        "ch_sigma": float(np.mean(ch_mult_values)) if ch_mult_values else 0.0,
         "clip": float(np.mean(clip_values)) if clip_values else 1.0,
         "clip_norm": float(np.mean(clip_norm_values)) if clip_norm_values else float(read_args_value(args, "dp_clip_norm", 0.0)),
     }
@@ -184,8 +188,8 @@ def main():
 
     rows.sort(key=lambda r: (r["mode"] != "none", r["sigma"]))
 
-    print(f"{'folder':42s} {'mode':>8s} {'scope':>7s} {'sigma':>8s} {'sig_avg':>8s} {'upd_eps':>12s} {'score_eps':>12s} {'final':>9s} {'last3':>9s} {'agg_noise':>9s} {'C_avg':>8s} {'clip':>8s}")
-    print("-" * 153)
+    print(f"{'folder':42s} {'mode':>8s} {'scope':>7s} {'sigma':>8s} {'eff_sig':>8s} {'alg_sig':>8s} {'ch_sig':>8s} {'upd_eps':>12s} {'score_eps':>12s} {'final':>9s} {'last3':>9s} {'agg_noise':>9s} {'C_avg':>8s} {'clip':>8s}")
+    print("-" * 171)
     for row in rows:
         print(
             f"{row['folder'][:42]:42s} "
@@ -193,6 +197,8 @@ def main():
             f"{row['scope'][:7]:>7s} "
             f"{row['sigma']:8.3f} "
             f"{row['sigma_avg']:8.3f} "
+            f"{row['alg_sigma']:8.3f} "
+            f"{row['ch_sigma']:8.3f} "
             f"{fmt_eps(row['update_epsilon']):>12s} "
             f"{fmt_eps(row['score_epsilon']):>12s} "
             f"{row['final']:9.2f} "
