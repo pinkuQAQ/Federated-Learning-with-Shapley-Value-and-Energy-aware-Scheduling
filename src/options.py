@@ -29,6 +29,19 @@ def args_parser():
     parser.add_argument('--model', type=str, default='cnn', help='model name')
     parser.add_argument('--num_channels', type=int, default=1, help="number of channels of imges")
     parser.add_argument('--num_classes', type=int, default=10, help="number of classes")
+    parser.add_argument('--trainable_scope', type=str, default='full',
+                        choices=['full', 'head', 'classifier'],
+                        help='which model parameters are locally trained and aggregated')
+    parser.add_argument('--dp_trainable_only', action='store_true', default=False,
+                        help='clip/noise/aggregate only trainable lightweight parameters')
+    parser.add_argument('--public_pretrain_epochs', type=int, default=0,
+                        help='server-side public/proxy pretraining epochs before FL')
+    parser.add_argument('--public_pretrain_samples', type=int, default=0,
+                        help='number of training samples used as public/proxy initialization data')
+    parser.add_argument('--public_pretrain_lr', type=float, default=None,
+                        help='learning rate for public/proxy pretraining; default uses --lr')
+    parser.add_argument('--lightweight_dp', action='store_true', default=False,
+                        help='enable DP-FL route with public initialization and head-only private aggregation')
 
     # 数据集参数
     parser.add_argument('--dataset', type=str, default='cifar', help="name of dataset")
@@ -79,7 +92,7 @@ def args_parser():
     # 客户端选择参数
     parser.add_argument('--initial_rounds', type=int, default=10,
                         help='number of initial rounds for round-robin selection')
-    parser.add_argument('--num_selected', type=int, default=10,
+    parser.add_argument('--num_selected', type=int, default=5,
                         help='number of clients selected per round')
 
     # ============= 新增：能量相关参数 =============
@@ -128,15 +141,43 @@ def args_parser():
                         choices=['none', 'local', 'central'],
                         help='privacy module: none, local client-side DP, or central DP after aggregation')
     parser.add_argument('--use_local_dp', action='store_true', default=False,
-                        help='legacy alias for --privacy_mode local')
+                        help='legacy alias for --privacy_mode local; main experiments use --privacy_mode central')
     parser.add_argument('--dp_clip_norm', type=float, default=1.0,
                         help='L2 clipping norm C for model updates')
-    parser.add_argument('--dp_noise_multiplier', type=float, default=0.05,
+    parser.add_argument('--dp_adaptive_clip', action='store_true', default=False,
+                        help='enable adaptive global clipping for central DP')
+    parser.add_argument('--dp_clip_scope', type=str, default='global',
+                        choices=['global', 'layer'],
+                        help='central DP clipping scope: global update norm or layer-wise tensor norms')
+    parser.add_argument('--dp_clip_percentile', type=float, default=80.0,
+                        help='percentile of selected update norms used by adaptive clipping')
+    parser.add_argument('--dp_clip_ema', type=float, default=0.9,
+                        help='EMA factor for adaptive clipping threshold')
+    parser.add_argument('--dp_clip_growth', type=float, default=1.2,
+                        help='maximum multiplicative growth of adaptive clipping norm per round')
+    parser.add_argument('--dp_min_clip_norm', type=float, default=0.05,
+                        help='minimum adaptive clipping norm')
+    parser.add_argument('--dp_max_clip_norm', type=float, default=2.0,
+                        help='maximum adaptive clipping norm')
+    parser.add_argument('--dp_noise_multiplier', type=float, default=1.0,
                         help='Gaussian noise multiplier sigma_dp for DP')
+    parser.add_argument('--dp_advanced', action='store_true', default=False,
+                        help='enable advanced CDP module with layer-wise clipping and scheduled noise')
+    parser.add_argument('--dp_noise_schedule', type=str, default='constant',
+                        choices=['constant', 'linear_increase', 'cosine_increase'],
+                        help='per-round noise schedule for advanced CDP')
+    parser.add_argument('--dp_noise_start_multiplier', type=float, default=0.7,
+                        help='initial fraction of dp_noise_multiplier for increasing schedules')
+    parser.add_argument('--dp_score_dp', action='store_true', default=False,
+                        help='enable DP perturbation for scalar Shapley contribution scores')
+    parser.add_argument('--dp_score_clip_norm', type=float, default=0.05,
+                        help='absolute clipping bound for scalar Shapley scores')
+    parser.add_argument('--dp_score_noise_multiplier', type=float, default=1.4,
+                        help='Gaussian noise multiplier for scalar Shapley score DP')
     parser.add_argument('--dp_delta', type=float, default=1e-5,
                         help='target delta for approximate DP accounting')
     parser.add_argument('--dp_shapley_alpha', type=float, default=0.9,
-                        help='EMA smoothing parameter for Shapley updates under local DP')
+                        help='EMA smoothing parameter for Shapley updates under noisy DP runs')
     # ================================================
 
     # ============= 计算能量参数 =============
@@ -151,5 +192,19 @@ def args_parser():
     args = parser.parse_args()
     if args.use_local_dp:
         args.privacy_mode = 'local'
+    if args.dp_advanced:
+        args.privacy_mode = 'central'
+        args.dp_adaptive_clip = True
+        args.dp_clip_scope = 'layer'
+    if args.lightweight_dp:
+        args.privacy_mode = 'central'
+        args.trainable_scope = 'head'
+        args.dp_trainable_only = True
+        args.dp_adaptive_clip = True
+        args.dp_clip_scope = 'layer'
+        if args.public_pretrain_epochs <= 0:
+            args.public_pretrain_epochs = 1
+        if args.public_pretrain_samples <= 0:
+            args.public_pretrain_samples = 5000
     args.use_local_dp = args.privacy_mode == 'local'
     return args

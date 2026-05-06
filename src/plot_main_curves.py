@@ -1,9 +1,7 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-plot_main_curves.py — main table 多 seed 测试曲线，每方法画 mean curve + ±1σ 阴影。
-输出 paper_latex/figures/baseline_convergence.pdf。
-"""
+plot_main_curves.py 鈥?main table 澶?seed 娴嬭瘯鏇茬嚎锛屾瘡鏂规硶鐢?mean curve + 卤1蟽 闃村奖銆?杈撳嚭 paper_latex/figures/baseline_convergence.pdf銆?"""
 import pickle
 from pathlib import Path
 from collections import defaultdict
@@ -18,11 +16,11 @@ FIG_OUT = ROOT / 'latex' / 'figures' / 'baseline_convergence.pdf'
 PNG_OUT = SAVE / 'baseline_convergence.png'
 
 METHODS = [
-    ('hybrid_SV_Energy_Lyapunov_LDP', 'Ours',     'C0', '-'),
-    ('random_LDP',                     'FedAvg',   'C1', '--'),
-    ('random_FedProx_LDP',             'FedProx',  'C2', '-.'),
-    ('poc_LDP',                        'PoC',      'C3', ':'),
-    ('fedcs_Energy_LDP',               'FedCS',    'C5', '-.'),
+    ('hybrid_SV_Energy_Lyapunov_CDP', 'Ours',     'C0', '-'),
+    ('random_CDP',                     'FedAvg',   'C1', '--'),
+    ('random_FedProx_CDP',             'FedProx',  'C2', '-.'),
+    ('poc_CDP',                        'PoC',      'C3', ':'),
+    ('fedcs_Energy_CDP',               'FedCS',    'C5', '-.'),
 ]
 
 

@@ -12,7 +12,7 @@
 # Task: Heterogeneity sensitivity sweep, single seed.
 # Methods: Ours, FedAvg, PoC (3 methods x 3 alpha values = 9 runs)
 # alpha: 0.25, 0.5, 1.0 (alpha=0.1 is already covered by the main runs)
-# sigma_dp = 0.01, 100 epochs, seed=42, same operating point as the main table.
+# sigma_dp = 1.0, q=0.05, 100 epochs, seed=42, same operating point as the main table.
 # Expect roughly 40 min/run x 9 runs = about 6 hours.
 # =============================================================================
 
@@ -35,7 +35,7 @@ DATASET=cifar
 MODEL=cnn
 EPOCHS=100
 NUM_USERS=100
-NUM_SELECTED=10
+NUM_SELECTED=5
 LOCAL_EP=2
 LOCAL_BS=32
 LR=0.01
@@ -44,8 +44,9 @@ SEED=42
 ALPHAS=(0.25 0.5 1.0)
 
 DP_CLIP_NORM=1.0
-DP_NOISE_MULTIPLIER=0.01
-DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
+DP_ADAPTIVE_ARGS="--lightweight_dp --public_pretrain_epochs 3 --public_pretrain_samples 20000 --dp_advanced --dp_noise_schedule linear_increase --dp_noise_start_multiplier 0.7 --dp_adaptive_clip --dp_clip_scope layer --dp_clip_percentile 80 --dp_clip_ema 0.8 --dp_clip_growth 1.2 --dp_min_clip_norm 0.05 --dp_max_clip_norm 1.0"
+DP_NOISE_MULTIPLIER=1.0
+DP_ARGS="--privacy_mode central --dp_clip_norm $DP_CLIP_NORM $DP_ADAPTIVE_ARGS --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
 
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 

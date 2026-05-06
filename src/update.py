@@ -5,6 +5,21 @@
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
+from models import configure_trainable_scope
+
+
+def prepare_model_for_local_training(model, args):
+    """Apply the requested trainable scope before local optimization."""
+    configure_trainable_scope(model, getattr(args, 'trainable_scope', 'full'))
+    model.train()
+
+    trainable_param_ids = {id(p) for p in model.parameters() if p.requires_grad}
+    for module in model.modules():
+        params = list(module.parameters(recurse=False))
+        if params and all(id(p) not in trainable_param_ids for p in params):
+            module.eval()
+
+    return [p for p in model.parameters() if p.requires_grad]
 
 
 class DatasetSplit(Dataset):
@@ -92,17 +107,17 @@ class LocalUpdate(object):
         model.to(self.device)
 
         # Set mode to train model
-        model.train()
+        trainable_params = prepare_model_for_local_training(model, self.args)
         epoch_loss = []
 
         # Set optimizer for the local updates
         if self.args.optimizer == 'sgd':
-            optimizer = torch.optim.SGD(model.parameters(), lr=self.args.lr,
+            optimizer = torch.optim.SGD(trainable_params, lr=self.args.lr,
                                         momentum=self.args.momentum,
                                         weight_decay=self.args.weight_decay
                                         )
         elif self.args.optimizer == 'adam':
-            optimizer = torch.optim.Adam(model.parameters(), lr=self.args.lr,
+            optimizer = torch.optim.Adam(trainable_params, lr=self.args.lr,
                                          weight_decay=self.args.weight_decay)
 
         for iter in range(self.args.local_ep):
@@ -190,18 +205,18 @@ class LocalUpdateFedProx(LocalUpdate):
         self.epochs_completed = 0
 
         model.to(self.device)
-        model.train()
+        trainable_params = prepare_model_for_local_training(model, self.args)
         epoch_loss = []
 
         # 保存全局模型参数作为近端项参考，不参与梯度更新
-        global_params = [p.clone().detach().to(self.device) for p in model.parameters()]
+        global_params = [p.clone().detach().to(self.device) for p in trainable_params]
 
         if self.args.optimizer == 'sgd':
-            optimizer = torch.optim.SGD(model.parameters(), lr=self.args.lr,
+            optimizer = torch.optim.SGD(trainable_params, lr=self.args.lr,
                                         momentum=self.args.momentum,
                                         weight_decay=self.args.weight_decay)
         elif self.args.optimizer == 'adam':
-            optimizer = torch.optim.Adam(model.parameters(), lr=self.args.lr,
+            optimizer = torch.optim.Adam(trainable_params, lr=self.args.lr,
                                          weight_decay=self.args.weight_decay)
 
         for iter in range(self.args.local_ep):
@@ -217,7 +232,7 @@ class LocalUpdateFedProx(LocalUpdate):
                 # 近端项: μ/2 * Σ||w_i - w_global||²
                 proximal_term = sum(
                     torch.norm(p - gp) ** 2
-                    for p, gp in zip(model.parameters(), global_params)
+                    for p, gp in zip(trainable_params, global_params)
                 )
                 loss += (self.mu / 2) * proximal_term
 
@@ -259,7 +274,11 @@ def test_inference(args, model, test_dataset, device=None):
 
         # Inference
         outputs = model(images)
+        if not torch.isfinite(outputs).all():
+            return 0.0, float('inf')
         batch_loss = criterion(outputs, labels)
+        if not torch.isfinite(batch_loss):
+            return 0.0, float('inf')
         loss += batch_loss.item()
 
         # Prediction

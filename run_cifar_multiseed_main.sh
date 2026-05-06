@@ -9,11 +9,11 @@
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_cifar_ms_%j.err
 
 # =============================================================================
-# Task:  Main table — CIFAR-10, α=0.1, 3 seeds, 6 methods, 100 epochs
+# Task:  Main table ??CIFAR-10, ?=0.1, 3 seeds, 6 methods, 100 epochs
 # Seeds: 42, 123, 2024
 # Methods: Ours, FedAvg, PoC, UCB, FedProx, FedCS
-# σ_dp:  0.01  (post-LDP-review default; σ=0.05 kills accuracy; σ=0 is also reported)
-# Expect ~40 min/run × 3 × 6 = ~12 h
+# sigma_dp: 1.0 (default lightweight-update DP operating point, q=0.05)
+# Expect ~40 min/run ? 3 ? 6 = ~12 h
 # =============================================================================
 
 echo "========================================"
@@ -35,19 +35,20 @@ DATASET=cifar
 MODEL=cnn
 EPOCHS=100
 NUM_USERS=100
-NUM_SELECTED=10
+NUM_SELECTED=5
 LOCAL_EP=2
 LOCAL_BS=32
 LR=0.01
 ALPHA=0.1
 SEEDS=(42 123 2024)
 
-# σ_dp=0.01 gives ~51% accuracy; set to 0 to rerun the clipping-only baseline
+# sigma_dp=1.5 is the default lightweight-update DP operating point; set to 0 for clipping-only.
 DP_CLIP_NORM=1.0
-DP_NOISE_MULTIPLIER=0.01
-DP_ARGS="--use_local_dp --dp_clip_norm $DP_CLIP_NORM --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
+DP_ADAPTIVE_ARGS="--lightweight_dp --public_pretrain_epochs 3 --public_pretrain_samples 20000 --dp_advanced --dp_noise_schedule linear_increase --dp_noise_start_multiplier 0.7 --dp_adaptive_clip --dp_clip_scope layer --dp_clip_percentile 80 --dp_clip_ema 0.8 --dp_clip_growth 1.2 --dp_min_clip_norm 0.05 --dp_max_clip_norm 1.0"
+DP_NOISE_MULTIPLIER=1.5
+DP_ARGS="--privacy_mode central --dp_clip_norm $DP_CLIP_NORM $DP_ADAPTIVE_ARGS --dp_noise_multiplier $DP_NOISE_MULTIPLIER"
 
-# FedCS deadline calibrated against σ_ch²=1.0 + default compute cost
+# FedCS deadline calibrated against ?_ch?=1.0 + default compute cost
 FEDCS_DEADLINE=5.0
 
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"

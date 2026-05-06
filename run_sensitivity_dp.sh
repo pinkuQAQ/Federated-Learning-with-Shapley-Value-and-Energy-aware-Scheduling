@@ -12,11 +12,9 @@ echo "========================================"
 echo "Job ID: $SLURM_JOB_ID"
 echo "Node: $SLURMD_NODENAME"
 echo "Start: $(date)"
-echo "Task: Noise-multiplier sweep (σ_dp) for the optional upload-perturbation module"
-echo "Note: the sweep spans σ_dp ∈ {0, 0.01, 0.05, 0.1, 0.2, 0.5, 1.0}."
-echo "      σ_dp ≤ 0.2 is the utility-preserving regime (no formal DP)."
-echo "      σ_dp ∈ {0.5, 1.0} is included to mark the regime where (ε,δ)"
-echo "      starts to bind meaningfully at the cost of accuracy."
+echo "Task: Noise-multiplier sweep (sigma_dp) for lightweight-update DP"
+echo "Note: the sweep spans sigma_dp in {0, 0.5, 0.75, 1.0, 1.5, 2.0} at q=0.05."
+echo "      Larger sigma_dp gives smaller epsilon_h but injects more noise into the head update."
 echo "========================================"
 
 source /data/home/zhaozhanshan/ENTER/etc/profile.d/conda.sh
@@ -31,14 +29,15 @@ DATASET=cifar
 MODEL=cnn
 EPOCHS=100
 NUM_USERS=100
-NUM_SELECTED=10
+NUM_SELECTED=5
 LOCAL_EP=2
 LOCAL_BS=32
 LR=0.01
 DIRICHLET_ALPHA=0.1
 SEED=42
 DP_CLIP_NORM=1.0
-NOISE_MULTIPLIERS=(0.0 0.01 0.05 0.1 0.2 0.5 1.0)
+DP_ADAPTIVE_ARGS="--lightweight_dp --public_pretrain_epochs 3 --public_pretrain_samples 20000 --dp_advanced --dp_noise_schedule linear_increase --dp_noise_start_multiplier 0.7 --dp_adaptive_clip --dp_clip_scope layer --dp_clip_percentile 80 --dp_clip_ema 0.8 --dp_clip_growth 1.2 --dp_min_clip_norm 0.05 --dp_max_clip_norm 1.0"
+NOISE_MULTIPLIERS=(0.0 0.5 0.75 1.0 1.5 2.0)
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
 for SIGMA_DP in "${NOISE_MULTIPLIERS[@]}"; do
@@ -64,14 +63,15 @@ for SIGMA_DP in "${NOISE_MULTIPLIERS[@]}"; do
         --use_lyapunov \
         --lyapunov_V 10.0 \
         --energy_budget 5.0 \
-        --use_local_dp \
+        --privacy_mode central \
         --dp_clip_norm $DP_CLIP_NORM \
+        $DP_ADAPTIVE_ARGS \
         --dp_noise_multiplier $SIGMA_DP \
         --output_folder $OUTPUT_FOLDER
 done
 
 echo ""
 echo "========================================"
-echo "Sensitivity analysis for local DP finished!"
+echo "Sensitivity analysis for central DP finished!"
 echo "End: $(date)"
 echo "========================================"

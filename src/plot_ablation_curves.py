@@ -1,8 +1,7 @@
-#!/usr/bin/env python
+﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-plot_ablation_curves.py — 消融多 seed 曲线 + ±1σ 阴影。
-输出 paper_latex/figures/ablation_curves.pdf
+plot_ablation_curves.py 鈥?娑堣瀺澶?seed 鏇茬嚎 + 卤1蟽 闃村奖銆?杈撳嚭 paper_latex/figures/ablation_curves.pdf
 """
 import pickle
 from pathlib import Path
@@ -18,10 +17,10 @@ FIG_OUT = ROOT / 'latex' / 'figures' / 'ablation_curves.pdf'
 PNG_OUT = SAVE / 'ablation_curves.png'
 
 VARIANTS = [
-    ('hybrid_SV_Energy_Lyapunov_LDP', 'Full (SV + Lyap + Energy)', 'C0', '-'),
-    ('random_Energy_Lyapunov_LDP',     'w/o SV',                    'C1', '--'),
-    ('hybrid_SV_Energy_LDP',           'w/o Lyapunov',              'C2', '-.'),
-    ('hybrid_SV_LDP',                  'w/o Energy (SV-only)',      'C3', ':'),
+    ('hybrid_SV_Energy_Lyapunov_CDP', 'Full (SV + Lyap + Energy)', 'C0', '-'),
+    ('random_Energy_Lyapunov_CDP',     'w/o SV',                    'C1', '--'),
+    ('hybrid_SV_Energy_CDP',           'w/o Lyapunov',              'C2', '-.'),
+    ('hybrid_SV_CDP',                  'w/o Energy (SV-only)',      'C3', ':'),
 ]
 
 

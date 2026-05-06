@@ -19,7 +19,7 @@ args.num_selected，按标准 RDP 复合给出 (ε, δ)。
 
 用法：
   python compute_privacy.py --sigma 0.01 --T 100 --q 0.1 --delta 1e-5
-  python compute_privacy.py --pkl ../save/baseline_cmp_ldp_20260421_124239/<file>.pkl
+  python compute_privacy.py --pkl ../save/main_3seed_a0.1_sigma0.01_seed42_<tag>/<file>.pkl
   python compute_privacy.py --table  # 打印所有典型 σ 的 (ε, δ) 对照表
 """
 import argparse
@@ -106,10 +106,11 @@ def from_pkl(pkl_path: str, delta: float) -> None:
     if args is None:
         print(f"[skip] {pkl_path}: no args in pkl")
         return
-    use_dp = getattr(args, 'use_local_dp', False)
+    privacy_mode = getattr(args, 'privacy_mode', None)
+    use_dp = privacy_mode in ('local', 'central') or getattr(args, 'use_local_dp', False)
     sigma = getattr(args, 'dp_noise_multiplier', 0.0)
     if not use_dp or sigma <= 0:
-        print(f"{os.path.basename(pkl_path)}: LDP off (σ_dp={sigma}) → ε = ∞ (no formal guarantee)")
+        print(f"{os.path.basename(pkl_path)}: DP off (σ_dp={sigma}) -> epsilon = inf (no formal guarantee)")
         return
     K = getattr(args, 'num_selected', 10)
     N = getattr(args, 'num_users', 100)
