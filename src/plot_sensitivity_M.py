@@ -32,7 +32,7 @@ def smooth_ema(arr, alpha=0.1):
 
 
 def load_latest_curve(m):
-    folders = sorted(SAVE.glob(f"sens_M{m}_*"))
+    folders = sorted(SAVE.glob(f"sens_M_channel_dp{m}_K*"))
     if not folders:
         return None
     pkls = list(folders[-1].glob("*.pkl"))

@@ -29,20 +29,6 @@ def args_parser():
     parser.add_argument('--model', type=str, default='cnn', help='model name')
     parser.add_argument('--num_channels', type=int, default=1, help="number of channels of imges")
     parser.add_argument('--num_classes', type=int, default=10, help="number of classes")
-    parser.add_argument('--trainable_scope', type=str, default='full',
-                        choices=['full', 'head', 'classifier'],
-                        help='which model parameters are locally trained and aggregated')
-    parser.add_argument('--dp_trainable_only', action='store_true', default=False,
-                        help='clip/noise/aggregate only trainable lightweight parameters')
-    parser.add_argument('--public_pretrain_epochs', type=int, default=0,
-                        help='server-side public/proxy pretraining epochs before FL')
-    parser.add_argument('--public_pretrain_samples', type=int, default=0,
-                        help='number of training samples used as public/proxy initialization data')
-    parser.add_argument('--public_pretrain_lr', type=float, default=None,
-                        help='learning rate for public/proxy pretraining; default uses --lr')
-    parser.add_argument('--lightweight_dp', action='store_true', default=False,
-                        help='enable DP-FL route with public initialization and head-only private aggregation')
-
     # 数据集参数
     parser.add_argument('--dataset', type=str, default='cifar', help="name of dataset")
     parser.add_argument('--iid', action='store_true',default=False, help='whether i.i.d or not')
@@ -111,6 +97,12 @@ def args_parser():
                         help='weight for Shapley value in composite score (0-1)')
     parser.add_argument('--energy_weight', type=float, default=0.5,
                         help='weight for energy score in composite score (0-1)')
+    parser.add_argument('--sv_weight', type=float, default=0.7,
+                        help='weight of normalized Shapley contribution in Lyapunov utility')
+    parser.add_argument('--battery_weight', type=float, default=0.15,
+                        help='weight of normalized residual battery state in Lyapunov utility')
+    parser.add_argument('--channel_weight', type=float, default=0.15,
+                        help='weight of normalized channel quality in Lyapunov utility')
     # ================================================
 
     # ============= 新增：李雅普诺夫优化参数 =============
@@ -138,10 +130,8 @@ def args_parser():
 
     # ============= 隐私保护参数 =============
     parser.add_argument('--privacy_mode', type=str, default='none',
-                        choices=['none', 'local', 'central'],
-                        help='privacy module: none, local client-side DP, or central DP after aggregation')
-    parser.add_argument('--use_local_dp', action='store_true', default=False,
-                        help='legacy alias for --privacy_mode local; main experiments use --privacy_mode central')
+                        choices=['none', 'central'],
+                        help='privacy module: none or central channel-noise accounting after aggregation')
     parser.add_argument('--dp_clip_norm', type=float, default=1.0,
                         help='L2 clipping norm C for model updates')
     parser.add_argument('--dp_adaptive_clip', action='store_true', default=False,
@@ -169,24 +159,16 @@ def args_parser():
     parser.add_argument('--dp_noise_start_multiplier', type=float, default=0.7,
                         help='initial fraction of dp_noise_multiplier for increasing schedules')
     parser.add_argument('--dp_channel_assisted', action='store_true', default=False,
-                        help='use channel-noise-assisted lightweight DP aggregation')
+                        help='use channel-noise-assisted DP aggregation')
     parser.add_argument('--dp_channel_noise_multiplier', type=float, default=0.0,
                         help='base channel-noise multiplier contributing to effective DP noise')
     parser.add_argument('--dp_channel_gain_cap', type=float, default=2.0,
                         help='cap for channel-noise amplification from selected channel gains')
-    parser.add_argument('--dp_channel_mode', type=str, default='topup',
-                        choices=['topup', 'additive'],
-                        help='topup: algorithmic noise only fills gap to sigma_dp; additive: add both noises')
-    parser.add_argument('--dp_score_dp', action='store_true', default=False,
-                        help='enable DP perturbation for scalar Shapley contribution scores')
-    parser.add_argument('--dp_score_clip_norm', type=float, default=0.05,
-                        help='absolute clipping bound for scalar Shapley scores')
-    parser.add_argument('--dp_score_noise_multiplier', type=float, default=1.4,
-                        help='Gaussian noise multiplier for scalar Shapley score DP')
+    parser.add_argument('--dp_channel_mode', type=str, default='channel_only',
+                        choices=['channel_only'],
+                        help='channel_only: use only equivalent channel noise')
     parser.add_argument('--dp_delta', type=float, default=1e-5,
                         help='target delta for approximate DP accounting')
-    parser.add_argument('--dp_shapley_alpha', type=float, default=0.9,
-                        help='EMA smoothing parameter for Shapley updates under noisy DP runs')
     # ================================================
 
     # ============= 计算能量参数 =============
@@ -199,21 +181,8 @@ def args_parser():
     # ================================================
 
     args = parser.parse_args()
-    if args.use_local_dp:
-        args.privacy_mode = 'local'
     if args.dp_advanced:
         args.privacy_mode = 'central'
         args.dp_adaptive_clip = True
         args.dp_clip_scope = 'layer'
-    if args.lightweight_dp:
-        args.privacy_mode = 'central'
-        args.trainable_scope = 'head'
-        args.dp_trainable_only = True
-        args.dp_adaptive_clip = True
-        args.dp_clip_scope = 'layer'
-        if args.public_pretrain_epochs <= 0:
-            args.public_pretrain_epochs = 1
-        if args.public_pretrain_samples <= 0:
-            args.public_pretrain_samples = 5000
-    args.use_local_dp = args.privacy_mode == 'local'
     return args

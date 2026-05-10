@@ -215,7 +215,7 @@ def exp_details(args):
     print(f'    Selection of users  : {args.num_selected}')
     print(f'    Local Batch size   : {args.local_bs}')
     print(f'    Local Epochs       : {args.local_ep}\n')
-    if hasattr(args, 'privacy_mode') and args.privacy_mode in ('local', 'central'):
+    if hasattr(args, 'privacy_mode') and args.privacy_mode == 'central':
         print('    Privacy parameters:')
         print(f'    Privacy mode       : {args.privacy_mode}')
         print(f'    Clip norm C        : {args.dp_clip_norm}')

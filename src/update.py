@@ -5,21 +5,14 @@
 import torch
 from torch import nn
 from torch.utils.data import DataLoader, Dataset
-from models import configure_trainable_scope
 
 
 def prepare_model_for_local_training(model, args):
-    """Apply the requested trainable scope before local optimization."""
-    configure_trainable_scope(model, getattr(args, 'trainable_scope', 'full'))
+    """Prepare the full model for local optimization."""
+    for param in model.parameters():
+        param.requires_grad = True
     model.train()
-
-    trainable_param_ids = {id(p) for p in model.parameters() if p.requires_grad}
-    for module in model.modules():
-        params = list(module.parameters(recurse=False))
-        if params and all(id(p) not in trainable_param_ids for p in params):
-            module.eval()
-
-    return [p for p in model.parameters() if p.requires_grad]
+    return list(model.parameters())
 
 
 class DatasetSplit(Dataset):

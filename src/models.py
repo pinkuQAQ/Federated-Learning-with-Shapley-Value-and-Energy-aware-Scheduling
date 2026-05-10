@@ -6,42 +6,6 @@ from torch import nn
 import torch.nn.functional as F
 
 
-def trainable_parameter_names(model, scope='full'):
-    """Return parameter names trained under a lightweight FL scope."""
-    if scope in (None, 'full'):
-        return {name for name, _ in model.named_parameters()}
-
-    names = set()
-    for name, _ in model.named_parameters():
-        if scope == 'classifier':
-            if name.endswith('fc2.weight') or name.endswith('fc2.bias') or name.endswith('fc.weight') or name.endswith('fc.bias'):
-                names.add(name)
-        elif scope == 'head':
-            if (
-                name.startswith('fc')
-                or name.startswith('layer_hidden')
-                or name.startswith('layer_input')
-            ):
-                names.add(name)
-
-    if not names:
-        names = {name for name, _ in model.named_parameters()}
-    return names
-
-
-def configure_trainable_scope(model, scope='full'):
-    """Freeze parameters outside the selected lightweight FL scope."""
-    trainable = trainable_parameter_names(model, scope)
-    for name, param in model.named_parameters():
-        param.requires_grad = name in trainable
-    return trainable
-
-
-def trainable_state_keys(model, scope='full'):
-    """State-dict keys corresponding to trainable parameters."""
-    return set(trainable_parameter_names(model, scope))
-
-
 class MLP(nn.Module):
     def __init__(self, dim_in, dim_hidden, dim_out):
         super(MLP, self).__init__()

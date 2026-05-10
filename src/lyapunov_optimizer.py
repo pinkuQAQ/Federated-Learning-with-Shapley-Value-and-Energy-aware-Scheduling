@@ -128,6 +128,67 @@ class LyapunovTripleScheduler:
 
         return scores
 
+    @staticmethod
+    def _minmax(values: np.ndarray, default: float = 1.0) -> np.ndarray:
+        values = np.asarray(values, dtype=np.float64)
+        if values.size == 0:
+            return values
+        v_min = np.nanmin(values)
+        v_max = np.nanmax(values)
+        if not np.isfinite(v_min) or not np.isfinite(v_max):
+            return np.ones_like(values) * default
+        if v_max - v_min > 1e-10:
+            return (values - v_min) / (v_max - v_min)
+        return np.ones_like(values) * default
+
+    def compute_scores(self, shapley_values: np.ndarray, energy_consumed: np.ndarray,
+                       battery_scores: np.ndarray = None,
+                       channel_gains: np.ndarray = None,
+                       sv_weight: float = 0.7,
+                       battery_weight: float = 0.15,
+                       channel_weight: float = 0.15) -> np.ndarray:
+        """
+        Compute the deployed Lyapunov scheduling score.
+
+        Instant utility rewards contribution, residual battery, and channel quality:
+            U_n = w_sv * SV_n + w_b * B_n + w_c * H_n
+
+        The virtual queue keeps the long-term energy penalty:
+            Score_n = V * U_n - Q_n * E_n
+        """
+        sv_norm = self._minmax(shapley_values, default=1.0)
+
+        energy_consumed = np.asarray(energy_consumed, dtype=np.float64)
+        energy_max = np.nanmax(energy_consumed)
+        if np.isfinite(energy_max) and energy_max > 1e-10:
+            energy_norm = energy_consumed / energy_max
+        else:
+            energy_norm = np.zeros_like(energy_consumed)
+
+        if battery_scores is None:
+            battery_norm = np.zeros_like(sv_norm)
+        else:
+            battery_norm = self._minmax(battery_scores, default=1.0)
+
+        if channel_gains is None:
+            channel_norm = np.zeros_like(sv_norm)
+        else:
+            channel_norm = self._minmax(channel_gains, default=1.0)
+
+        total_weight = max(sv_weight + battery_weight + channel_weight, 1e-12)
+        sv_weight = sv_weight / total_weight
+        battery_weight = battery_weight / total_weight
+        channel_weight = channel_weight / total_weight
+
+        utility = (
+            sv_weight * sv_norm
+            + battery_weight * battery_norm
+            + channel_weight * channel_norm
+        )
+        scores = self.V * utility - self.energy_queue * energy_norm
+
+        return scores
+
     def get_statistics(self) -> Dict:
         """获取优化统计信息"""
         return {

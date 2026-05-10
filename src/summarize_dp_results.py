@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Summarize lightweight local CDP smoke-test runs."""
+"""Summarize DP experiment result folders."""
 
 import argparse
 import math
@@ -127,18 +127,7 @@ def summarize_folder(folder):
         eps = compute_epsilon(float(sigma), sample_rate, rounds, delta)
 
     dp_stats = data.get("dp_statistics", {}) or {}
-    score_dp = bool(read_args_value(args, "dp_score_dp", False) or dp_stats.get("score_dp", False))
-    score_sigma = float(read_args_value(args, "dp_score_noise_multiplier", dp_stats.get("score_noise_multiplier", 0.0)) or 0.0)
-    score_clip = float(read_args_value(args, "dp_score_clip_norm", dp_stats.get("score_clip_norm", 0.0)) or 0.0)
-    if not score_dp:
-        score_eps = float("inf")
-    elif "score_epsilon" in dp_stats:
-        score_eps = float(dp_stats["score_epsilon"])
-    else:
-        score_eps = compute_epsilon(score_sigma, sample_rate, rounds, delta)
     update_eps = float(dp_stats.get("update_epsilon", eps))
-    scope = str(read_args_value(args, "trainable_scope", dp_stats.get("trainable_scope", "full")))
-
     history = data.get("dp_round_history", [])
     client_items = [x for x in history if int(x.get("client", -1)) >= 0]
     aggregate_items = [x for x in history if int(x.get("client", -1)) < 0]
@@ -153,11 +142,7 @@ def summarize_folder(folder):
         "folder": folder.name,
         "mode": privacy_mode,
         "sigma": float(sigma),
-        "score_epsilon": score_eps,
         "update_epsilon": update_eps,
-        "score_sigma": score_sigma,
-        "score_clip": score_clip,
-        "scope": scope,
         "final": float(acc[-1]),
         "last3": float(acc[-min(3, len(acc)):].mean()),
         "noise": float(np.mean(noise_values)) if noise_values else 0.0,
@@ -171,8 +156,8 @@ def summarize_folder(folder):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--tag", default=None, help="Run tag printed by local CDP bat scripts")
-    parser.add_argument("--pattern", default="local_cdp_*", help="Folder glob under save/, e.g. local_cdp_sweep_*")
+    parser.add_argument("--tag", default=None, help="Run tag printed by local channel-privacy bat scripts")
+    parser.add_argument("--pattern", default="local_channel_dp_*", help="Folder glob under save/, e.g. channel_dp_*")
     args = parser.parse_args()
 
     pattern = args.pattern
@@ -183,24 +168,22 @@ def main():
     rows = [row for row in rows if row is not None]
 
     if not rows:
-        print("No local CDP result folders found.")
+        print("No channel-privacy result folders found.")
         return
 
     rows.sort(key=lambda r: (r["mode"] != "none", r["sigma"]))
 
-    print(f"{'folder':42s} {'mode':>8s} {'scope':>7s} {'sigma':>8s} {'eff_sig':>8s} {'alg_sig':>8s} {'ch_sig':>8s} {'upd_eps':>12s} {'score_eps':>12s} {'final':>9s} {'last3':>9s} {'agg_noise':>9s} {'C_avg':>8s} {'clip':>8s}")
-    print("-" * 171)
+    print(f"{'folder':42s} {'mode':>8s} {'sigma':>8s} {'eff_sig':>8s} {'alg_sig':>8s} {'ch_sig':>8s} {'upd_eps':>12s} {'final':>9s} {'last3':>9s} {'agg_noise':>9s} {'C_avg':>8s} {'clip':>8s}")
+    print("-" * 145)
     for row in rows:
         print(
             f"{row['folder'][:42]:42s} "
             f"{row['mode']:>8s} "
-            f"{row['scope'][:7]:>7s} "
             f"{row['sigma']:8.3f} "
             f"{row['sigma_avg']:8.3f} "
             f"{row['alg_sigma']:8.3f} "
             f"{row['ch_sigma']:8.3f} "
             f"{fmt_eps(row['update_epsilon']):>12s} "
-            f"{fmt_eps(row['score_epsilon']):>12s} "
             f"{row['final']:9.2f} "
             f"{row['last3']:9.2f} "
             f"{row['noise']:9.4f} "

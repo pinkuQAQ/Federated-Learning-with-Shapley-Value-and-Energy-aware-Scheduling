@@ -55,7 +55,7 @@ def make_summary_writer(logdir):
 
 from options import args_parser
 from update import LocalUpdate, LocalUpdateFedProx, test_inference, DatasetSplit
-from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar, configure_trainable_scope, trainable_state_keys
+from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
 from utils import get_dataset, average_weights, exp_details
 
 from shapley import MCShapley
@@ -63,7 +63,7 @@ from selection import (hybrid_selection, random_selection, round_robin_selection
                        greedy_shapley_selection, energy_aware_selection,
                        hybrid_energy_aware_selection, power_of_choice_selection,
                        ucb_selection, fedcs_selection)
-from torch.utils.data import DataLoader, Subset
+from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
 
 # 训练/验证/测试数据划分比例（每个客户端的本地数据中，前80%训练，中间10%验证，后10%测试）
@@ -94,35 +94,7 @@ def build_model(args, train_dataset):
     else:
         exit('Error: unrecognized model')
 
-    configure_trainable_scope(model, getattr(args, 'trainable_scope', 'full'))
     return model, model_class
-
-
-def _private_update_keys(args, reference_state=None, model=None):
-    """Keys included in lightweight private aggregation."""
-    if not getattr(args, 'dp_trainable_only', False):
-        return None
-    if model is not None:
-        return trainable_state_keys(model, getattr(args, 'trainable_scope', 'full'))
-    if reference_state is None:
-        return None
-    scope = getattr(args, 'trainable_scope', 'full')
-    if scope in (None, 'full'):
-        return set(reference_state.keys())
-    if scope == 'classifier':
-        return {
-            key for key in reference_state.keys()
-            if key.endswith('fc2.weight') or key.endswith('fc2.bias') or key.endswith('fc.weight') or key.endswith('fc.bias')
-        }
-    return {
-        key for key in reference_state.keys()
-        if key.startswith('fc') or key.startswith('layer_hidden') or key.startswith('layer_input')
-    }
-
-
-def _is_private_key(args, key, state=None):
-    keys = _private_update_keys(args, state)
-    return keys is None or key in keys
 
 
 def evaluate_poc_candidates(args, global_model, train_dataset, user_groups,
@@ -161,44 +133,6 @@ def evaluate_poc_candidates(args, global_model, train_dataset, user_groups,
     return candidates, candidate_losses
 
 
-def public_pretrain_model(args, model, train_dataset, device):
-    """Optional public/proxy initialization before private FL rounds."""
-    epochs = int(getattr(args, 'public_pretrain_epochs', 0))
-    samples = int(getattr(args, 'public_pretrain_samples', 0))
-    if epochs <= 0 or samples <= 0:
-        configure_trainable_scope(model, getattr(args, 'trainable_scope', 'full'))
-        return
-
-    rng = np.random.RandomState(int(getattr(args, 'seed', 42)) + 2027)
-    samples = min(samples, len(train_dataset))
-    indices = rng.choice(len(train_dataset), samples, replace=False)
-    loader = DataLoader(Subset(train_dataset, indices), batch_size=args.local_bs, shuffle=True)
-
-    model.to(device)
-    configure_trainable_scope(model, 'full')
-    model.train()
-    lr = float(args.public_pretrain_lr) if args.public_pretrain_lr is not None else float(args.lr)
-    optimizer = torch.optim.SGD(model.parameters(), lr=lr, momentum=args.momentum, weight_decay=args.weight_decay)
-    criterion = torch.nn.CrossEntropyLoss().to(device)
-
-    print("\n" + "=" * 60)
-    print(f"Public/proxy initialization: samples={samples}, epochs={epochs}, lr={lr}")
-    print("=" * 60)
-    for ep in range(epochs):
-        losses = []
-        for images, labels in loader:
-            images, labels = images.to(device), labels.to(device)
-            optimizer.zero_grad()
-            loss = criterion(model(images), labels)
-            loss.backward()
-            optimizer.step()
-            losses.append(loss.item())
-        print(f"  pretrain epoch {ep + 1}/{epochs}: loss={np.mean(losses):.4f}")
-
-    model.to('cpu')
-    configure_trainable_scope(model, getattr(args, 'trainable_scope', 'full'))
-
-
 def _get_client_data_sizes(user_groups, num_users):
     """获取所有客户端的训练数据量"""
     sizes = np.zeros(num_users)
@@ -207,56 +141,10 @@ def _get_client_data_sizes(user_groups, num_users):
     return sizes
 
 
-def _apply_local_dp(global_state, local_state, args):
-    """Clip and perturb a client's model update before upload."""
-    if getattr(args, 'privacy_mode', 'none') != 'local':
-        return copy.deepcopy(local_state), {
-            'pre_clip_norm': 0.0,
-            'post_clip_norm': 0.0,
-            'clip_factor': 1.0,
-            'noise_std': 0.0,
-        }
-
-    clip_norm = max(float(args.dp_clip_norm), 1e-12)
-    noise_std = float(args.dp_noise_multiplier) * clip_norm
-
-    total_sq_norm = 0.0
-    for key, local_tensor in local_state.items():
-        global_tensor = global_state[key].to(local_tensor.device)
-        if torch.is_floating_point(local_tensor):
-            delta = (local_tensor - global_tensor).float()
-            total_sq_norm += torch.sum(delta * delta).item()
-
-    pre_clip_norm = total_sq_norm ** 0.5
-    clip_factor = min(1.0, clip_norm / (pre_clip_norm + 1e-12)) if pre_clip_norm > 0 else 1.0
-
-    privatized_state = copy.deepcopy(local_state)
-    for key, local_tensor in local_state.items():
-        global_tensor = global_state[key].to(local_tensor.device)
-        if not torch.is_floating_point(local_tensor):
-            privatized_state[key] = local_tensor.clone()
-            continue
-
-        delta = (local_tensor - global_tensor).float()
-        delta = delta * clip_factor
-        noise = torch.randn_like(delta) * noise_std
-        sanitized = global_tensor.float() + delta + noise
-        privatized_state[key] = sanitized.to(local_tensor.dtype)
-
-    return privatized_state, {
-        'pre_clip_norm': pre_clip_norm,
-        'post_clip_norm': pre_clip_norm * clip_factor,
-        'clip_factor': clip_factor,
-        'noise_std': noise_std,
-    }
-
-
 def _client_update_norm(global_state, local_state, args):
     """Return the L2 norm of one client's model update."""
     total_sq_norm = 0.0
     for key, local_tensor in local_state.items():
-        if not _is_private_key(args, key, local_state):
-            continue
         global_tensor = global_state[key].to(local_tensor.device)
         if torch.is_floating_point(local_tensor):
             delta = (local_tensor - global_tensor).float()
@@ -268,8 +156,6 @@ def _client_update_layer_norms(global_state, local_state, args):
     """Return per-tensor L2 norms for one client's model update."""
     norms = {}
     for key, local_tensor in local_state.items():
-        if not _is_private_key(args, key, local_state):
-            continue
         global_tensor = global_state[key].to(local_tensor.device)
         if torch.is_floating_point(local_tensor):
             delta = (local_tensor - global_tensor).float()
@@ -341,8 +227,6 @@ def _clip_client_update(global_state, local_state, clip_norm, args):
     clip_norm = max(float(clip_norm), 1e-12)
     total_sq_norm = 0.0
     for key, local_tensor in local_state.items():
-        if not _is_private_key(args, key, local_state):
-            continue
         global_tensor = global_state[key].to(local_tensor.device)
         if torch.is_floating_point(local_tensor):
             delta = (local_tensor - global_tensor).float()
@@ -354,7 +238,7 @@ def _clip_client_update(global_state, local_state, clip_norm, args):
     clipped_state = copy.deepcopy(local_state)
     for key, local_tensor in local_state.items():
         global_tensor = global_state[key].to(local_tensor.device)
-        if not torch.is_floating_point(local_tensor) or not _is_private_key(args, key, local_state):
+        if not torch.is_floating_point(local_tensor):
             clipped_state[key] = local_tensor.clone()
             continue
         delta = (local_tensor - global_tensor).float() * clip_factor
@@ -377,7 +261,7 @@ def _clip_client_update_layerwise(global_state, local_state, layer_clip_norms, a
 
     for key, local_tensor in local_state.items():
         global_tensor = global_state[key].to(local_tensor.device)
-        if not torch.is_floating_point(local_tensor) or not _is_private_key(args, key, local_state):
+        if not torch.is_floating_point(local_tensor):
             clipped_state[key] = local_tensor.clone()
             continue
 
@@ -429,18 +313,9 @@ def _channel_noise_multiplier_for_round(args):
 
 
 def _effective_noise_multipliers(args, target_multiplier):
-    """Split target DP noise into algorithmic and channel-assisted components."""
-    target = max(float(target_multiplier), 0.0)
+    """Use channel noise as the only perturbation in the active privacy route."""
     channel = _channel_noise_multiplier_for_round(args)
-    if not getattr(args, 'dp_channel_assisted', False) or channel <= 0:
-        return target, 0.0, target
-    mode = getattr(args, 'dp_channel_mode', 'topup')
-    if mode == 'additive':
-        algorithmic = target
-    else:
-        algorithmic = math.sqrt(max(target * target - channel * channel, 0.0))
-    effective = math.sqrt(algorithmic * algorithmic + channel * channel)
-    return algorithmic, channel, effective
+    return 0.0, channel, channel
 
 
 def _add_central_dp_noise(global_state, averaged_state, args, selected_count):
@@ -461,7 +336,7 @@ def _add_central_dp_noise(global_state, averaged_state, args, selected_count):
     alg_noise_stds = []
     channel_noise_stds = []
     for key, avg_tensor in averaged_state.items():
-        if not torch.is_floating_point(avg_tensor) or not _is_private_key(args, key, averaged_state):
+        if not torch.is_floating_point(avg_tensor):
             noised_state[key] = avg_tensor.clone()
             continue
         key_clip_norm = max(float(layer_clip_norms.get(key, clip_norm)), 1e-12) if layer_mode else clip_norm
@@ -471,10 +346,11 @@ def _add_central_dp_noise(global_state, averaged_state, args, selected_count):
         noise_stds.append(noise_std)
         alg_noise_stds.append(alg_std)
         channel_noise_stds.append(ch_std)
-        alg_noise = torch.randn_like(avg_tensor.float()) * alg_std if alg_std > 0 else torch.zeros_like(avg_tensor.float())
-        ch_noise = torch.randn_like(avg_tensor.float()) * ch_std if ch_std > 0 else torch.zeros_like(avg_tensor.float())
+        avg_float = avg_tensor.float()
+        alg_noise = torch.randn_like(avg_float) * alg_std if alg_std > 0 else torch.zeros_like(avg_float)
+        ch_noise = torch.randn_like(avg_float) * ch_std if ch_std > 0 else torch.zeros_like(avg_float)
         noise = alg_noise + ch_noise
-        noised_state[key] = (avg_tensor.float() + noise).to(avg_tensor.dtype)
+        noised_state[key] = (avg_float + noise).to(avg_tensor.dtype)
         noise_sq_norm += torch.sum(noise * noise).item()
         alg_noise_sq_norm += torch.sum(alg_noise * alg_noise).item()
         channel_noise_sq_norm += torch.sum(ch_noise * ch_noise).item()
@@ -486,7 +362,7 @@ def _add_central_dp_noise(global_state, averaged_state, args, selected_count):
         'algorithmic_noise_multiplier': alg_multiplier,
         'channel_noise_multiplier': channel_multiplier,
         'channel_assisted': bool(getattr(args, 'dp_channel_assisted', False)),
-        'channel_mode': getattr(args, 'dp_channel_mode', 'topup'),
+        'channel_mode': getattr(args, 'dp_channel_mode', 'channel_only'),
         'noise_std': float(np.mean(noise_stds)) if noise_stds else default_noise_std,
         'algorithmic_noise_std': float(np.mean(alg_noise_stds)) if alg_noise_stds else 0.0,
         'channel_noise_std': float(np.mean(channel_noise_stds)) if channel_noise_stds else 0.0,
@@ -588,30 +464,6 @@ def _compute_observed_dp_epsilon(dp_round_history, sample_rate, delta):
     return _compute_dp_epsilon_schedule(sigmas, sample_rate, delta)
 
 
-def _apply_score_dp(score, args):
-    """Clip and perturb a scalar Shapley contribution score."""
-    if not getattr(args, 'dp_score_dp', False):
-        return float(score), {
-            'raw_score': float(score),
-            'clipped_score': float(score),
-            'noise': 0.0,
-            'noise_std': 0.0,
-            'clip_bound': 0.0,
-        }
-
-    clip_bound = max(float(args.dp_score_clip_norm), 1e-12)
-    clipped = float(np.clip(float(score), -clip_bound, clip_bound))
-    noise_std = float(args.dp_score_noise_multiplier) * clip_bound
-    noise = float(np.random.normal(0.0, noise_std))
-    return clipped + noise, {
-        'raw_score': float(score),
-        'clipped_score': clipped,
-        'noise': noise,
-        'noise_std': noise_std,
-        'clip_bound': clip_bound,
-    }
-
-
 def select_clients(args, epoch, num_selected, initial_rounds,
                    shapley_values, client_participation_counts,
                    energy_scores, available_clients,
@@ -619,6 +471,8 @@ def select_clients(args, epoch, num_selected, initial_rounds,
                    client_local_losses, user_groups=None,
                    ucb_rewards=None, ucb_counts=None):
     """统一的客户端选择逻辑"""
+    if shapley_values is not None:
+        np.nan_to_num(shapley_values, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
 
     # ---- 非Shapley路径 ----
     if not args.use_shapley:
@@ -703,7 +557,16 @@ def _select_lyapunov(args, epoch, num_selected, shapley_values,
     energy_consumed_estimate = energy_manager.compute_energy_consumption(
         energy_manager.channel_gains, client_data_sizes=all_data_sizes
     )
-    scores = lyapunov_optimizer.compute_scores(shapley_values, energy_consumed_estimate)
+    battery_scores = energy_manager.get_energy_scores(normalize=True)
+    scores = lyapunov_optimizer.compute_scores(
+        shapley_values,
+        energy_consumed_estimate,
+        battery_scores=battery_scores,
+        channel_gains=energy_manager.channel_gains,
+        sv_weight=args.sv_weight,
+        battery_weight=args.battery_weight,
+        channel_weight=args.channel_weight,
+    )
 
     # 在可用客户端（含Poisson子采样）内选择
     if available_clients and len(available_clients) >= num_selected:
@@ -843,12 +706,11 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
             shapley_time_history.append({'round': epoch, 'time_s': _shapley_elapsed})
 
         updated_count = 0
-        score_dp_stats = []
         for i, client_id in enumerate(client_id_list):
             raw_sv = round_shapley[i]
-            new_sv, score_stats = _apply_score_dp(raw_sv, args)
-            score_stats['client'] = int(client_id)
-            score_dp_stats.append(score_stats)
+            if not np.isfinite(float(raw_sv)):
+                raw_sv = 0.0
+            new_sv = float(raw_sv)
 
             if args.shapley_update_method == 'mean':
                 old_count = max(0, client_participation_counts[client_id] - 1)
@@ -860,8 +722,6 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
                     shapley_values[client_id] = new_sv
             elif args.shapley_update_method == 'exponential':
                 alpha = args.shapley_alpha
-                if getattr(args, 'privacy_mode', 'none') == 'local':
-                    alpha = max(alpha, getattr(args, 'dp_shapley_alpha', alpha))
                 shapley_values[client_id] = (
                     alpha * shapley_values[client_id] +
                     (1 - alpha) * new_sv
@@ -869,26 +729,23 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
             elif args.shapley_update_method == 'recent':
                 shapley_values[client_id] = new_sv
 
+            if not np.isfinite(float(shapley_values[client_id])):
+                shapley_values[client_id] = 0.0
+
             updated_count += 1
 
-        if shapley_time_history is not None and score_dp_stats:
-            raw_scores = np.array([s['raw_score'] for s in score_dp_stats], dtype=np.float64)
-            noisy_scores = np.array([shapley_values[s['client']] for s in score_dp_stats], dtype=np.float64)
+        if shapley_time_history is not None:
+            raw_scores = np.asarray(round_shapley, dtype=np.float64)
+            stored_scores = np.array([shapley_values[c] for c in client_id_list], dtype=np.float64)
             shapley_time_history[-1].update({
-                'score_dp': bool(getattr(args, 'dp_score_dp', False)),
-                'score_clip_bound': float(getattr(args, 'dp_score_clip_norm', 0.0)),
-                'score_noise_std': float(getattr(args, 'dp_score_noise_multiplier', 0.0)) * float(getattr(args, 'dp_score_clip_norm', 0.0)),
                 'raw_score_mean': float(raw_scores.mean()) if raw_scores.size else 0.0,
                 'raw_score_std': float(raw_scores.std()) if raw_scores.size else 0.0,
-                'stored_score_mean': float(noisy_scores.mean()) if noisy_scores.size else 0.0,
-                'stored_score_std': float(noisy_scores.std()) if noisy_scores.size else 0.0,
+                'stored_score_mean': float(stored_scores.mean()) if stored_scores.size else 0.0,
+                'stored_score_std': float(stored_scores.std()) if stored_scores.size else 0.0,
             })
 
         if args.verbose:
             print(f"  [Shapley] 更新了 {updated_count} 个客户端的Shapley值")
-            if getattr(args, 'dp_score_dp', False):
-                print(f"  [Shapley-DP] score clip={args.dp_score_clip_norm}, "
-                      f"sigma_score={args.dp_score_noise_multiplier}")
             if len(round_shapley) > 0:
                 print(f"  [Shapley] 本轮Shapley值范围: [{min(round_shapley):.6f}, "
                       f"{max(round_shapley):.6f}]")
@@ -925,9 +782,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         method_suffix += "_Lyapunov"
     if args.use_fedprox:
         method_suffix += "_FedProx"
-    if privacy_mode == 'local':
-        method_suffix += "_LocalDP"
-    elif privacy_mode == 'central':
+    if privacy_mode == 'central':
         method_suffix += "_CDP"
 
     file_name = f'{exp_folder}/{args.dataset}_{args.model}_{args.epochs}_' \
@@ -974,7 +829,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             'ucb_counts': ucb_counts,
         })
 
-    if privacy_mode in ('local', 'central'):
+    if privacy_mode == 'central':
         sampling_rate = num_selected / float(args.num_users)
         configured_update_epsilon = _compute_configured_dp_epsilon(args, sampling_rate)
         observed_update_epsilon = _compute_observed_dp_epsilon(dp_round_history, sampling_rate, args.dp_delta)
@@ -995,21 +850,10 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 'channel_assisted': getattr(args, 'dp_channel_assisted', False),
                 'channel_noise_multiplier': getattr(args, 'dp_channel_noise_multiplier', 0.0),
                 'channel_gain_cap': getattr(args, 'dp_channel_gain_cap', None),
-                'channel_mode': getattr(args, 'dp_channel_mode', 'topup'),
-                'score_dp': getattr(args, 'dp_score_dp', False),
-                'score_clip_norm': getattr(args, 'dp_score_clip_norm', None),
-                'score_noise_multiplier': getattr(args, 'dp_score_noise_multiplier', None),
-                'score_epsilon': _compute_dp_epsilon(
-                    args.dp_score_noise_multiplier,
-                    sampling_rate,
-                    args.epochs,
-                    args.dp_delta
-                ) if getattr(args, 'dp_score_dp', False) else float('inf'),
+                'channel_mode': getattr(args, 'dp_channel_mode', 'channel_only'),
                 'configured_update_epsilon': configured_update_epsilon,
                 'observed_update_epsilon': observed_update_epsilon,
                 'update_epsilon': observed_update_epsilon if np.isfinite(observed_update_epsilon) else configured_update_epsilon,
-                'trainable_scope': getattr(args, 'trainable_scope', 'full'),
-                'trainable_only': getattr(args, 'dp_trainable_only', False),
                 'delta': args.dp_delta,
                 'sampling_rate': sampling_rate,
             },
@@ -1025,9 +869,10 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             print(f'\n数据已保存到: {file_name}')
             print(f'文件大小: {file_size / 1024:.2f} KB')
 
+            safe_timestamp = str(timestamp).replace('\\', '_').replace('/', '_')
             objects_dir = '../save/objects'
             os.makedirs(objects_dir, exist_ok=True)
-            objects_file = f'{objects_dir}/result_{timestamp}.pkl'
+            objects_file = f'{objects_dir}/result_{safe_timestamp}.pkl'
             shutil.copy2(file_name, objects_file)
             print(f'副本已保存到: {objects_file}')
         else:
@@ -1074,7 +919,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                     f.write(f"- 能量权重: {args.energy_weight}\n")
             f.write(f"\n## Privacy Module\n\n")
             f.write(f"- Privacy mode: {privacy_mode}\n")
-            if privacy_mode in ('local', 'central'):
+            if privacy_mode == 'central':
                 f.write(f"- 裁剪阈值 C: {args.dp_clip_norm}\n")
                 if getattr(args, 'dp_adaptive_clip', False):
                     f.write(f"- Adaptive clipping: percentile={args.dp_clip_percentile}, "
@@ -1082,14 +927,6 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                             f"range=[{args.dp_min_clip_norm}, {args.dp_max_clip_norm}]\n")
                 f.write(f"- 噪声乘子 sigma_dp: {args.dp_noise_multiplier}\n")
                 f.write(f"- delta: {args.dp_delta}\n")
-                if getattr(args, 'dp_score_dp', False):
-                    score_epsilon = _compute_dp_epsilon(
-                        args.dp_score_noise_multiplier,
-                        num_selected / float(args.num_users),
-                        args.epochs,
-                        args.dp_delta
-                    )
-                    f.write(f"- score epsilon: {score_epsilon:.4f}\n")
             f.write(f"\n## 实验结果\n\n")
             f.write(f"- 最终测试准确率: {test_acc * 100:.2f}%\n")
             f.write(f"- 总运行时间: {time.time() - start_time:.2f}秒\n")
@@ -1119,7 +956,10 @@ if __name__ == '__main__':
     num_selected = args.num_selected
     initial_rounds = max(1, args.num_users // num_selected)
 
-    device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available() and int(getattr(args, 'gpu', 0)) >= 0:
+        device = torch.device(f"cuda:{int(args.gpu)}")
+    else:
+        device = torch.device('cpu')
     print(f"使用设备: {device}")
     print(f"每轮选择的客户端数: {num_selected}")
     print(f"初始轮询轮数: {initial_rounds}")
@@ -1129,7 +969,6 @@ if __name__ == '__main__':
 
     # BUILD MODEL (Fix 6: 提取为函数)
     global_model, model_class = build_model(args, train_dataset)
-    public_pretrain_model(args, global_model, train_dataset, device)
     global_model.to(device)
     global_model.train()
     print(global_model)
@@ -1261,7 +1100,7 @@ if __name__ == '__main__':
 
     # ============= Privacy module 初始化 =============
     privacy_mode = getattr(args, 'privacy_mode', 'none')
-    if privacy_mode in ('local', 'central'):
+    if privacy_mode == 'central':
         print("\n" + "=" * 60)
         print(f"启用隐私保护模块: {privacy_mode}")
         print(f"裁剪阈值 C: {args.dp_clip_norm}")
@@ -1274,16 +1113,6 @@ if __name__ == '__main__':
                   f"mode={args.dp_channel_mode}, gain_cap={args.dp_channel_gain_cap}")
         if getattr(args, 'dp_advanced', False):
             print(f"Advanced CDP: schedule={args.dp_noise_schedule}, start={args.dp_noise_start_multiplier}")
-        if getattr(args, 'dp_score_dp', False):
-            score_eps = _compute_dp_epsilon(
-                args.dp_score_noise_multiplier,
-                num_selected / float(args.num_users),
-                args.epochs,
-                args.dp_delta
-            )
-            print(f"贡献度标量DP: clip={args.dp_score_clip_norm}, "
-                  f"sigma_score={args.dp_score_noise_multiplier}, "
-                  f"epsilon_score={score_eps:.4f}")
         print(f"DP delta: {args.dp_delta}")
         print("=" * 60 + "\n")
 
@@ -1391,7 +1220,12 @@ if __name__ == '__main__':
                 continue
 
             else:
-                w, dp_stats = _apply_local_dp(global_weights, w, args)
+                dp_stats = {
+                    'pre_clip_norm': 0.0,
+                    'post_clip_norm': 0.0,
+                    'clip_factor': 1.0,
+                    'noise_std': 0.0,
+                }
 
             # 只做一次deepcopy，共享引用以减少内存开销
             w_copy = copy.deepcopy(w)
@@ -1401,18 +1235,6 @@ if __name__ == '__main__':
 
             local_losses.append(copy.deepcopy(loss))
             client_local_losses[idx] = loss
-
-            if getattr(args, 'privacy_mode', 'none') in ('local', 'central'):
-                dp_round_history.append({
-                    'round': epoch,
-                    'client': int(idx),
-                    'mode': getattr(args, 'privacy_mode', 'none'),
-                    'pre_clip_norm': dp_stats['pre_clip_norm'],
-                    'post_clip_norm': dp_stats['post_clip_norm'],
-                    'clip_factor': dp_stats['clip_factor'],
-                    'noise_std': dp_stats['noise_std'],
-                    'clip_norm': args.dp_clip_norm,
-                })
 
         if getattr(args, 'privacy_mode', 'none') == 'central':
             layer_mode = getattr(args, 'dp_clip_scope', 'global') == 'layer'
@@ -1704,10 +1526,11 @@ if __name__ == '__main__':
         print(f"  能量队列最大值: {lyap_stats['queue_max']:.4f}")
         print(f"  李雅普诺夫函数值: {lyap_stats['lyapunov_value']:.2f}")
 
-        lyap_viz_path = f'{exp_folder}/lyapunov_{args.dataset}_{timestamp}.png'
+        safe_timestamp = str(timestamp).replace('\\', '_').replace('/', '_')
+        lyap_viz_path = f'{exp_folder}/lyapunov_{args.dataset}_{safe_timestamp}.png'
         lyapunov_optimizer.visualize_optimization(lyap_viz_path)
 
-    if privacy_mode in ('local', 'central') and dp_round_history:
+    if privacy_mode == 'central' and dp_round_history:
         client_dp_items = [item for item in dp_round_history if item.get('client', -1) >= 0]
         clip_factors = [item['clip_factor'] for item in client_dp_items]
         pre_clip_norms = [item['pre_clip_norm'] for item in client_dp_items]
@@ -1725,14 +1548,5 @@ if __name__ == '__main__':
             print(f"  Channel-assisted DP: eff_sigma={np.mean(eff_sigmas):.4f}, "
                   f"alg_sigma={np.mean(alg_sigmas):.4f}, ch_sigma={np.mean(ch_sigmas):.4f}, "
                   f"epsilon_h={obs_eps:.4f}")
-        if getattr(args, 'dp_score_dp', False):
-            score_eps = _compute_dp_epsilon(
-                args.dp_score_noise_multiplier,
-                num_selected / float(args.num_users),
-                args.epochs,
-                args.dp_delta
-            )
-            print(f"  贡献度标量 epsilon_score: {score_eps:.4f}")
-
     print(f"总运行时间: {time.time() - start_time:.2f}秒")
     print(f"{'=' * 60}")

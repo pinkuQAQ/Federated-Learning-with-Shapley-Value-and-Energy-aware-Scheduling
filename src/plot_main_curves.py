@@ -1,7 +1,6 @@
 ﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-plot_main_curves.py 鈥?main table 澶?seed 娴嬭瘯鏇茬嚎锛屾瘡鏂规硶鐢?mean curve + 卤1蟽 闃村奖銆?杈撳嚭 paper_latex/figures/baseline_convergence.pdf銆?"""
+"""Plot main-comparison curves from save/main/<run_tag>/seed*."""
 import pickle
 from pathlib import Path
 from collections import defaultdict
@@ -45,8 +44,22 @@ def smooth_ema(arr, alpha=0.1):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--tag', default=None, help='Run tag under save/main/. Defaults to latest.')
+    args = parser.parse_args()
+
     data = defaultdict(list)
-    folders = sorted(SAVE.glob('main_3seed_a0.1_sigma0.01_seed*_180923'))
+    main_root = SAVE / 'main'
+    if args.tag:
+        run_dir = main_root / args.tag
+    else:
+        run_dirs = sorted([p for p in main_root.iterdir() if p.is_dir()])
+        if not run_dirs:
+            raise FileNotFoundError('No run directories found under save/main')
+        run_dir = run_dirs[-1]
+    folders = sorted([p for p in run_dir.iterdir() if p.is_dir()])
+    print(f'using {run_dir}')
     for folder in folders:
         for pkl in folder.glob('*.pkl'):
             t = find_tag(pkl.name)
@@ -70,7 +83,7 @@ def main():
 
     ax.set_xlabel('Communication round')
     ax.set_ylabel('Test accuracy (%)')
-    ax.set_title(r'CIFAR-10, Dirichlet $\alpha=0.1$, $\sigma_{\mathrm{dp}}=0.01$, '
+    ax.set_title(r'CIFAR-10, Dirichlet $\alpha=0.1$, channel-only privacy, '
                  'mean over 3 seeds')
     ax.grid(alpha=0.3, linestyle=':')
     ax.legend(loc='lower right', fontsize=9, ncol=2, framealpha=0.85)

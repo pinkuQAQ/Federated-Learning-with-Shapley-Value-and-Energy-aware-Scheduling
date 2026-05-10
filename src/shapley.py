@@ -116,12 +116,19 @@ class MCShapley:
 
                 outputs = model(images)
                 batch_loss = self.criterion(outputs, labels)
+                if (not torch.isfinite(outputs).all()) or (not torch.isfinite(batch_loss)):
+                    del model
+                    if torch.cuda.is_available():
+                        torch.cuda.empty_cache()
+                    return float('-inf')
 
                 total_loss += batch_loss.item() * images.size(0)
                 total_samples += images.size(0)
 
         avg_loss = total_loss / total_samples if total_samples > 0 else float('inf')
         utility = -avg_loss
+        if not np.isfinite(utility):
+            utility = float('-inf')
 
         del model
         if torch.cuda.is_available():
@@ -211,6 +218,10 @@ class MCShapley:
 
         logger.info(f"v0={v0:.6f}, vM={vM:.6f}, Δ={vM - v0:.6f}")
 
+        if not (np.isfinite(v0) and np.isfinite(vM)):
+            logger.warning("Non-finite Shapley endpoint utility detected; returning zero values.")
+            return [0.0] * M
+
         if abs(vM - v0) < self.epsilon:
             logger.info("轮间截断触发")
             return [0.0] * M
@@ -258,7 +269,13 @@ class MCShapley:
                         v_current = self.compute_utility(subset_model, val_data_loader)
                         self.utility_cache[cache_key] = v_current
 
+                if not np.isfinite(v_current):
+                    logger.warning("Non-finite subset utility detected; assigning zero marginal contribution.")
+                    v_current = v_prev
+
                 marginal = v_current - v_prev
+                if not np.isfinite(marginal):
+                    marginal = 0.0
 
                 logger.debug(f"    边际贡献: {marginal:.6f} 属于客户端 {current_client_id}")
 
@@ -284,6 +301,7 @@ class MCShapley:
             logger.debug(f"迭代{tau + 1}完成，耗时{elapsed:.2f}秒")
 
         result = [shapley_dict[cid] for cid in client_ids]
+        result = [float(v) if np.isfinite(v) else 0.0 for v in result]
 
         logger.info(f"Shapley计算完成，范围: [{min(result):.6f}, {max(result):.6f}]")
 

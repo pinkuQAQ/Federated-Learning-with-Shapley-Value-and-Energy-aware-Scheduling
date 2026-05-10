@@ -1,8 +1,6 @@
 ﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""
-plot_ablation_curves.py 鈥?娑堣瀺澶?seed 鏇茬嚎 + 卤1蟽 闃村奖銆?杈撳嚭 paper_latex/figures/ablation_curves.pdf
-"""
+"""Plot ablation curves from save/main and save/ablation run folders."""
 import pickle
 from pathlib import Path
 from collections import defaultdict
@@ -17,10 +15,10 @@ FIG_OUT = ROOT / 'latex' / 'figures' / 'ablation_curves.pdf'
 PNG_OUT = SAVE / 'ablation_curves.png'
 
 VARIANTS = [
-    ('hybrid_SV_Energy_Lyapunov_CDP', 'Full (SV + Lyap + Energy)', 'C0', '-'),
-    ('random_Energy_Lyapunov_CDP',     'w/o SV',                    'C1', '--'),
-    ('hybrid_SV_Energy_CDP',           'w/o Lyapunov',              'C2', '-.'),
-    ('hybrid_SV_CDP',                  'w/o Energy (SV-only)',      'C3', ':'),
+    ('main', 'hybrid_SV_Energy_Lyapunov_CDP', 'Full', 'C0', '-'),
+    ('ablation', 'random_Energy_Lyapunov_CDP', 'w/o SV', 'C1', '--'),
+    ('ablation', 'hybrid_SV_Energy_CDP', 'w/o Lyapunov', 'C2', '-.'),
+    ('ablation', 'hybrid_SV_CDP', 'w/o Energy', 'C3', ':'),
 ]
 
 
@@ -45,18 +43,40 @@ def smooth_ema(arr, alpha=0.1):
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--main-tag', default=None, help='Run tag under save/main. Defaults to latest.')
+    parser.add_argument('--ablation-tag', default=None, help='Run tag under save/ablation. Defaults to latest.')
+    args = parser.parse_args()
+
+    def latest_run(group, tag):
+        root = SAVE / group
+        if tag:
+            return root / tag
+        runs = sorted([p for p in root.iterdir() if p.is_dir()])
+        if not runs:
+            raise FileNotFoundError(f'No run directories found under {root}')
+        return runs[-1]
+
+    roots = {
+        'main': latest_run('main', args.main_tag),
+        'ablation': latest_run('ablation', args.ablation_tag),
+    }
+    print(f"using main={roots['main']}")
+    print(f"using ablation={roots['ablation']}")
+
     data = defaultdict(list)
-    for folder in sorted(SAVE.glob('ablation_3seed_a0.1_seed*_180923')):
-        for pkl in folder.glob('*.pkl'):
-            t = find_tag(pkl.name)
-            if t is None:
-                continue
-            with open(pkl, 'rb') as f:
-                d = pickle.load(f)
-            data[t].append(normalize(d['test_accuracy']))
+    for group, tag, *_ in VARIANTS:
+        for folder in sorted([p for p in roots[group].iterdir() if p.is_dir()]):
+            for pkl in folder.glob('*.pkl'):
+                if find_tag(pkl.name) != tag:
+                    continue
+                with open(pkl, 'rb') as f:
+                    d = pickle.load(f)
+                data[tag].append(normalize(d['test_accuracy']))
 
     fig, ax = plt.subplots(figsize=(7.0, 4.4))
-    for tag, label, color, ls in VARIANTS:
+    for _, tag, label, color, ls in VARIANTS:
         if tag not in data or not data[tag]:
             continue
         L = min(len(a) for a in data[tag])
@@ -68,8 +88,7 @@ def main():
 
     ax.set_xlabel('Communication round')
     ax.set_ylabel('Test accuracy (%)')
-    ax.set_title(r'Ablation on CIFAR-10, $\alpha=0.1$, '
-                 'mean over 3 seeds')
+    ax.set_title(r'Ablation on CIFAR-10, $\alpha=0.1$, channel-only privacy')
     ax.grid(alpha=0.3, linestyle=':')
     ax.legend(loc='lower right', fontsize=9, framealpha=0.85)
     ax.set_xlim(1, 100)

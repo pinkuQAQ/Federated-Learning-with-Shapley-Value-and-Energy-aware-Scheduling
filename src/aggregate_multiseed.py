@@ -1,271 +1,138 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
+"""Aggregate current channel-only experiment outputs under save/.
+
+Expected folder layout:
+  save/main/<run_tag>/seed*
+  save/ablation/<run_tag>/seed*
+
+The script writes compact LaTeX rows to:
+  save/agg_main_table.tex
+  save/agg_ablation_table.tex
+  save/agg_summary.json
 """
-aggregate_multiseed.py 鈥?鎶?save/ 涓?4 绫诲疄楠岃仛鍚堬細
-  - main_3seed_*           涓诲姣旇〃锛? 鏂规硶 脳 3 seed 脳 100 ep锛?  - ablation_3seed_*       娑堣瀺琛紙4 鍙樹綋 脳 3 seed 脳 100 ep锛?  - sens_V*                V 鏁忔劅鎬э紙5 涓?V 脳 1 seed锛?  - sens_dp_sigma*         蟽_dp 鏁忔劅鎬э紙7 涓?蟽 脳 1 seed锛?
-杈撳嚭锛?  - stdout 鐨勫鐓ц〃
-  - save/agg_main_table.tex / agg_ablation_table.tex / agg_sens_dp_table.tex 绛?    鍙洿鎺?\\input 鍒拌鏂囬噷
-  - save/agg_summary.json 缁欏悗缁敾鍥捐剼鏈
-"""
+
 import argparse
 import json
 import pickle
-from pathlib import Path
 from collections import defaultdict
+from pathlib import Path
+
 import numpy as np
 
 ROOT = Path(__file__).parent.parent
-SAVE = ROOT / 'save'
+SAVE = ROOT / "save"
 
 MAIN_TAGS = [
-    ('hybrid_SV_Energy_Lyapunov_CDP', 'Ours'),
-    ('random_CDP',                     'FedAvg'),
-    ('random_FedProx_CDP',             'FedProx'),
-    ('poc_CDP',                        'PoC'),
-    ('fedcs_Energy_CDP',               'FedCS'),
+    ("hybrid_SV_Energy_Lyapunov_CDP", "Ours"),
+    ("random_CDP", "FedAvg"),
+    ("random_FedProx_CDP", "FedProx"),
+    ("poc_CDP", "PoC"),
+    ("fedcs_Energy_CDP", "FedCS"),
 ]
 
-ABL_TAGS = [
-    ('hybrid_SV_Energy_Lyapunov_CDP', 'Full (SV + Lyap + Energy)'),
-    ('random_Energy_Lyapunov_CDP',     'w/o SV'),
-    ('hybrid_SV_Energy_CDP',           'w/o Lyap'),
-    ('hybrid_SV_CDP',                  'w/o Energy'),
+ABLATION_TAGS = [
+    ("hybrid_SV_Energy_Lyapunov_CDP", "Full (SV + Lyap + Energy)"),
+    ("random_Energy_Lyapunov_CDP", "w/o SV"),
+    ("hybrid_SV_Energy_CDP", "w/o Lyap"),
+    ("hybrid_SV_CDP", "w/o Energy"),
 ]
 
 
-def find_tag(name):
-    s = Path(name).stem
-    m = '_B[32]_'
-    i = s.find(m)
-    return s[i + len(m):] if i >= 0 else None
+def find_tag(path):
+    stem = Path(path).stem
+    marker = "_B[32]_"
+    idx = stem.find(marker)
+    return stem[idx + len(marker):] if idx >= 0 else None
 
 
-def load_acc(path):
-    with open(path, 'rb') as f:
-        d = pickle.load(f)
-    a = np.asarray(d['test_accuracy'], dtype=np.float64)
-    return (a * 100.0 if a.max() <= 1.5 else a), d
+def load_accuracy(path):
+    with open(path, "rb") as f:
+        data = pickle.load(f)
+    acc = np.asarray(data["test_accuracy"], dtype=np.float64)
+    if acc.max() <= 1.5:
+        acc = acc * 100.0
+    return acc
 
 
-def stat_block(arrs):
-    """list[np.ndarray] -> dict of summary numbers (mean卤std on last5/final)"""
-    finals = np.array([a[-1] for a in arrs])
-    last5  = np.array([a[-5:].mean() for a in arrs])
-    slopes = np.array([np.polyfit(np.arange(20), a[-20:], 1)[0] for a in arrs])
-    return dict(
-        n=len(arrs),
-        final_mean=float(finals.mean()), final_std=float(finals.std(ddof=0)),
-        last5_mean=float(last5.mean()),  last5_std=float(last5.std(ddof=0)),
-        slope_mean=float(slopes.mean()),
-    )
+def stat_block(series):
+    finals = np.asarray([acc[-1] for acc in series], dtype=np.float64)
+    last5 = np.asarray([acc[-5:].mean() for acc in series], dtype=np.float64)
+    return {
+        "n": int(len(series)),
+        "final_mean": float(finals.mean()),
+        "final_std": float(finals.std(ddof=0)),
+        "last5_mean": float(last5.mean()),
+        "last5_std": float(last5.std(ddof=0)),
+    }
 
 
-# ---------------- main ----------------
-
-def aggregate_main(tag_filter=None):
+def collect_group(group, tag=None):
+    base = SAVE / group
+    if not base.exists():
+        return defaultdict(list), []
+    run_dirs = sorted([p for p in base.iterdir() if p.is_dir()])
+    if tag:
+        run_dirs = [p for p in run_dirs if tag in p.name]
+    if not run_dirs:
+        return defaultdict(list), []
+    selected_runs = [run_dirs[-1]]
     data = defaultdict(list)
-    folders = sorted(SAVE.glob('main_3seed_a0.1_sigma0.01_seed*'))
-    if tag_filter:
-        folders = [f for f in folders if tag_filter in f.name]
-    for folder in folders:
-        for pkl in folder.glob('*.pkl'):
-            t = find_tag(pkl.name)
-            if t is None:
+    folders = []
+    for run_dir in selected_runs:
+        for folder in sorted(run_dir.glob("*")):
+            if not folder.is_dir():
                 continue
-            acc, _ = load_acc(pkl)
-            data[t].append(acc)
+            folders.append(folder)
+            for pkl in folder.glob("*.pkl"):
+                method = find_tag(pkl)
+                if method:
+                    data[method].append(load_accuracy(pkl))
     return data, folders
 
 
-def aggregate_ablation(tag_filter=None):
-    data = defaultdict(list)
-    folders = sorted(SAVE.glob('ablation_3seed_a0.1_seed*'))
-    if tag_filter:
-        folders = [f for f in folders if tag_filter in f.name]
-    for folder in folders:
-        for pkl in folder.glob('*.pkl'):
-            t = find_tag(pkl.name)
-            if t is None:
-                continue
-            acc, _ = load_acc(pkl)
-            data[t].append(acc)
-    return data, folders
-
-
-def aggregate_sens_V():
-    out = {}
-    for v in [1, 5, 10, 20, 50]:
-        folders = sorted(SAVE.glob(f'sens_V{v}_*'))
-        if not folders:
-            continue
-        pkls = list(folders[-1].glob('*.pkl'))
-        if pkls:
-            out[v] = load_acc(pkls[0])[0]
-    return out
-
-
-def aggregate_sens_dp():
-    out = {}
-    for s in [0.0, 0.01, 0.05, 0.1, 0.2, 0.5, 1.0]:
-        folders = sorted(SAVE.glob(f'sens_dp_sigma{s}_*'))
-        if not folders:
-            continue
-        pkls = list(folders[-1].glob('*.pkl'))
-        if pkls:
-            out[s] = load_acc(pkls[0])[0]
-    return out
-
-
-# ---------------- LaTeX writers ----------------
-
-def write_main_table_tex(data, path: Path):
-    rows = []
-    summaries = {label: stat_block(data[tag]) for tag, label in MAIN_TAGS if tag in data}
+def write_rows(data, tags, path, include_final=True):
+    summaries = {label: stat_block(data[tag]) for tag, label in tags if tag in data}
     if not summaries:
-        return
-    best = max(summaries, key=lambda k: summaries[k]['last5_mean'])
-    for tag, label in MAIN_TAGS:
-        st = summaries.get(label)
-        if st is None:
-            rows.append(f'{label} & N/A & N/A \\\\')
+        return {}
+    best = max(summaries, key=lambda label: summaries[label]["last5_mean"])
+    rows = []
+    for tag, label in tags:
+        stats = summaries.get(label)
+        if stats is None:
+            rows.append(f"{label} & N/A" + (" & N/A" if include_final else "") + r" \\")
             continue
-        cell5 = f"{st['last5_mean']:.2f} $\\pm$ {st['last5_std']:.2f}"
-        cellf = f"{st['final_mean']:.2f} $\\pm$ {st['final_std']:.2f}"
+        last5 = f"{stats['last5_mean']:.2f} $\\pm$ {stats['last5_std']:.2f}"
+        final = f"{stats['final_mean']:.2f} $\\pm$ {stats['final_std']:.2f}"
         if label == best:
-            cell5 = '\\textbf{' + cell5 + '}'
-        rows.append(f'{label} & {cell5} & {cellf} \\\\')
-    body = '\n'.join(rows)
-    text = ("% Generated by aggregate_multiseed.py\n"
-            "% CIFAR-10, alpha=0.1, q=0.05, sigma_dp=1.5, 100 epochs, 3 seeds (42/123/2024).\n"
-            "% Columns: last-5-round avg accuracy, final-round accuracy. mean +/- std.\n"
-            + body + '\n')
-    path.write_text(text, encoding='utf-8')
+            last5 = "\\textbf{" + last5 + "}"
+        rows.append(f"{label} & {last5}" + (f" & {final}" if include_final else "") + r" \\")
+    path.write_text("% Generated by aggregate_multiseed.py\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    return summaries
 
-
-def write_ablation_table_tex(data, path: Path):
-    rows = []
-    summaries = {label: stat_block(data[tag]) for tag, label in ABL_TAGS if tag in data}
-    if not summaries:
-        return
-    best = max(summaries, key=lambda k: summaries[k]['last5_mean'])
-    for tag, label in ABL_TAGS:
-        st = summaries.get(label)
-        if st is None:
-            rows.append(f'{label} & N/A \\\\')
-            continue
-        cell5 = f"{st['last5_mean']:.2f} $\\pm$ {st['last5_std']:.2f}"
-        if label == best:
-            cell5 = '\\textbf{' + cell5 + '}'
-        rows.append(f'{label} & {cell5} \\\\')
-    text = ("% Generated by aggregate_multiseed.py\n"
-            "% CIFAR-10, alpha=0.1, 100 epochs, 3 seeds. Last-5 mean +/- std.\n"
-            + '\n'.join(rows) + '\n')
-    path.write_text(text, encoding='utf-8')
-
-
-def write_sens_dp_table_tex(data, path: Path):
-    rows = []
-    for s in sorted(data.keys()):
-        acc = data[s]
-        last5 = acc[-5:].mean()
-        final = acc[-1]
-        rows.append(f'{s:.2f} & {last5:.2f} & {final:.2f} \\\\')
-    text = ("% Generated by aggregate_multiseed.py\n"
-            "% lightweight-update DP sigma_dp sweep, alpha=0.1, q=0.05, V=10, 100 epochs, single seed=42.\n"
-            "% Columns: sigma_dp, last-5 acc (%), final acc (%).\n"
-            + '\n'.join(rows) + '\n')
-    path.write_text(text, encoding='utf-8')
-
-
-def write_sens_V_table_tex(data, path: Path):
-    rows = []
-    for v in sorted(data.keys()):
-        acc = data[v]
-        last5 = acc[-5:].mean()
-        final = acc[-1]
-        rows.append(f'{v} & {last5:.2f} & {final:.2f} \\\\')
-    text = ("% Generated by aggregate_multiseed.py\n"
-            "% MC-Shapley budget sweep, alpha=0.1, q=0.05, sigma_dp=1.5, 100 epochs, single seed=42.\n"
-            "% Columns: V, last-5 acc (%), final acc (%).\n"
-            + '\n'.join(rows) + '\n')
-    path.write_text(text, encoding='utf-8')
-
-
-# ---------------- main ----------------
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--tag', default=None)
+    parser.add_argument("--tag", default=None, help="Optional run tag under save/main or save/ablation")
     args = parser.parse_args()
 
-    print('=' * 80)
-    print('MAIN 鈥?伪=0.1, 蟽_dp=0.01, 100 ep, 3 seeds')
-    print('=' * 80)
-    main_data, main_folders = aggregate_main(args.tag)
-    for f in main_folders:
-        print(f'  found: {f.name}')
-    summary_main = {}
-    for tag, label in MAIN_TAGS:
-        if tag not in main_data:
-            print(f'  {label:10s}: missing')
-            continue
-        st = stat_block(main_data[tag])
-        summary_main[label] = st
-        print(f'  {label:10s}: last5 {st["last5_mean"]:5.2f}卤{st["last5_std"]:4.2f}  '
-              f'final {st["final_mean"]:5.2f}卤{st["final_std"]:4.2f}  '
-              f'slope {st["slope_mean"]:+.3f}')
-    write_main_table_tex(main_data, SAVE / 'agg_main_table.tex')
+    main_data, main_folders = collect_group("main", args.tag)
+    ablation_data, ablation_folders = collect_group("ablation", args.tag)
 
-    print('\n' + '=' * 80)
-    print('ABLATION 鈥?伪=0.1, 100 ep, 3 seeds')
-    print('=' * 80)
-    abl_data, abl_folders = aggregate_ablation(args.tag)
-    for f in abl_folders:
-        print(f'  found: {f.name}')
-    summary_abl = {}
-    for tag, label in ABL_TAGS:
-        if tag not in abl_data:
-            print(f'  {label:25s}: missing')
-            continue
-        st = stat_block(abl_data[tag])
-        summary_abl[label] = st
-        print(f'  {label:25s}: last5 {st["last5_mean"]:5.2f}卤{st["last5_std"]:4.2f}')
-    write_ablation_table_tex(abl_data, SAVE / 'agg_ablation_table.tex')
+    print("MAIN folders:")
+    for folder in main_folders:
+        print(f"  {folder.relative_to(SAVE)}")
+    main_summary = write_rows(main_data, MAIN_TAGS, SAVE / "agg_main_table.tex", include_final=True)
 
-    print('\n' + '=' * 80)
-    print('V SENSITIVITY 鈥?伪=0.1, 蟽_dp=0.01, 100 ep, single seed')
-    print('=' * 80)
-    v_data = aggregate_sens_V()
-    summary_V = {}
-    for v in sorted(v_data.keys()):
-        acc = v_data[v]
-        last5 = acc[-5:].mean()
-        summary_V[v] = float(last5)
-        print(f'  V={v:>2d}: last5 {last5:.2f}%, final {acc[-1]:.2f}%')
-    write_sens_V_table_tex(v_data, SAVE / 'agg_sens_V_table.tex')
+    print("\nABLATION folders:")
+    for folder in ablation_folders:
+        print(f"  {folder.relative_to(SAVE)}")
+    ablation_summary = write_rows(ablation_data, ABLATION_TAGS, SAVE / "agg_ablation_table.tex", include_final=False)
 
-    print('\n' + '=' * 80)
-    print('蟽_dp SENSITIVITY 鈥?伪=0.1, V=10, 100 ep, single seed')
-    print('=' * 80)
-    s_data = aggregate_sens_dp()
-    summary_dp = {}
-    for s in sorted(s_data.keys()):
-        acc = s_data[s]
-        last5 = acc[-5:].mean()
-        summary_dp[s] = float(last5)
-        print(f'  蟽={s:>5.2f}: last5 {last5:.2f}%, final {acc[-1]:.2f}%')
-    write_sens_dp_table_tex(s_data, SAVE / 'agg_sens_dp_table.tex')
-
-    summary = {
-        'main': summary_main,
-        'ablation': summary_abl,
-        'sens_V': summary_V,
-        'sens_dp': summary_dp,
-    }
-    (SAVE / 'agg_summary.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
-    print(f'\nWritten: agg_main_table.tex, agg_ablation_table.tex, agg_sens_V_table.tex, '
-          f'agg_sens_dp_table.tex, agg_summary.json (under save/)')
+    summary = {"main": main_summary, "ablation": ablation_summary}
+    (SAVE / "agg_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    print("\nWritten: save/agg_main_table.tex, save/agg_ablation_table.tex, save/agg_summary.json")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
