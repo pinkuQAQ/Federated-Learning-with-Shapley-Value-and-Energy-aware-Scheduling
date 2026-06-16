@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 REM Full local Windows run for non-IID alpha sensitivity.
-REM Methods: Ours, FedAvg, PoC. Single seed, four alpha values.
+REM Methods: Ours, FedAvg, FedProx, PoC, Oort. Single seed, four alpha values.
 
 set "PROJECT_ROOT=%~dp0..\.."
 cd /d "%PROJECT_ROOT%"
@@ -50,7 +50,7 @@ set EXP_ROOT=sensitivity_alpha\%RUN_TAG%
 echo ========================================
 echo CIFAR-10 alpha sensitivity local run
 echo Alphas: 0.1, 0.25, 0.5, 1.0
-echo Methods: Ours, FedAvg, PoC
+echo Methods: Ours, FedAvg, FedProx, PoC, Oort
 echo Seed: %SEED%, epochs: %EPOCHS%, K: %NUM_SELECTED%
 echo Channel-only privacy sigma_ch: %CHANNEL_SIGMA%
 echo Output root: save\%EXP_ROOT%
@@ -68,13 +68,14 @@ for %%A in (0.1 0.25 0.5 1.0) do (
   echo Output folder: !OUT!
   echo ========================================
 
-  echo [1/3] Ours: SV + Energy + Lyapunov
+  echo [1/5] Ours: SV + Energy + Lyapunov
   python federated_main.py ^
     --dataset %DATASET% --model %MODEL% --epochs %EPOCHS% ^
     --num_users %NUM_USERS% --num_selected %NUM_SELECTED% ^
     --local_ep %LOCAL_EP% --local_bs %LOCAL_BS% --lr %LR% ^
     --dirichlet_alpha %%A --seed %SEED% --test_size %TEST_SIZE% ^
     --gpu %GPU_ID% ^
+    --shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 ^
     --shapley_update_method mean --shapley_alpha 0.5 --shapley_max_iter 20 ^
     --use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0 ^
     --use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0 ^
@@ -83,7 +84,7 @@ for %%A in (0.1 0.25 0.5 1.0) do (
     --output_folder !OUT!
   if errorlevel 1 goto failed
 
-  echo [2/3] FedAvg: random selection
+  echo [2/5] FedAvg: random selection
   python federated_main.py ^
     --dataset %DATASET% --model %MODEL% --epochs %EPOCHS% ^
     --num_users %NUM_USERS% --num_selected %NUM_SELECTED% ^
@@ -95,7 +96,19 @@ for %%A in (0.1 0.25 0.5 1.0) do (
     --output_folder !OUT!
   if errorlevel 1 goto failed
 
-  echo [3/3] PoC: Power of Choice
+  echo [3/5] FedProx: random selection with proximal regularization
+  python federated_main.py ^
+    --dataset %DATASET% --model %MODEL% --epochs %EPOCHS% ^
+    --num_users %NUM_USERS% --num_selected %NUM_SELECTED% ^
+    --local_ep %LOCAL_EP% --local_bs %LOCAL_BS% --lr %LR% ^
+    --dirichlet_alpha %%A --seed %SEED% --test_size %TEST_SIZE% ^
+    --gpu %GPU_ID% ^
+    --no_shapley --selection_method random --use_fedprox --fedprox_mu 0.01 ^
+    %DP_ARGS% ^
+    --output_folder !OUT!
+  if errorlevel 1 goto failed
+
+  echo [4/5] PoC: Power of Choice
   python federated_main.py ^
     --dataset %DATASET% --model %MODEL% --epochs %EPOCHS% ^
     --num_users %NUM_USERS% --num_selected %NUM_SELECTED% ^
@@ -103,6 +116,19 @@ for %%A in (0.1 0.25 0.5 1.0) do (
     --dirichlet_alpha %%A --seed %SEED% --test_size %TEST_SIZE% ^
     --gpu %GPU_ID% ^
     --no_shapley --selection_method poc ^
+    %DP_ARGS% ^
+    --output_folder !OUT!
+  if errorlevel 1 goto failed
+
+  echo [5/5] Oort: utility-aware selection with system efficiency
+  python federated_main.py ^
+    --dataset %DATASET% --model %MODEL% --epochs %EPOCHS% ^
+    --num_users %NUM_USERS% --num_selected %NUM_SELECTED% ^
+    --local_ep %LOCAL_EP% --local_bs %LOCAL_BS% --lr %LR% ^
+    --dirichlet_alpha %%A --seed %SEED% --test_size %TEST_SIZE% ^
+    --gpu %GPU_ID% ^
+    --no_shapley --selection_method oort ^
+    --use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0 ^
     %DP_ARGS% ^
     --output_folder !OUT!
   if errorlevel 1 goto failed

@@ -51,22 +51,34 @@ def args_parser():
     parser.add_argument('--no_shapley', action='store_false', default=True, dest='use_shapley',
                         help='disable Shapley-based client selection (default: use Shapley)')
     parser.add_argument('--selection_method', type=str, default='hybrid',
-                        choices=['random', 'round_robin', 'greedy', 'hybrid', 'poc', 'ucb', 'fedcs'],
+                        choices=['random', 'round_robin', 'greedy', 'hybrid', 'poc', 'ucb', 'oort'],
                         help='client selection method')
     parser.add_argument('--poc_candidate_size', type=int, default=None,
                         help='Power of Choice candidate pool size (d), default: num_selected * 2')
     parser.add_argument('--poc_decay_rate', type=float, default=0.9,
                         help='Power of Choice loss decay rate (default: 0.9)')
-    parser.add_argument('--fedcs_deadline', type=float, default=5.0,
-                        help='FedCS per-round deadline (J, taken as energy proxy for completion time)')
+    parser.add_argument('--oort_utility_weight', type=float, default=0.8,
+                        help='Oort-style weight for statistical utility')
+    parser.add_argument('--oort_system_weight', type=float, default=0.2,
+                        help='Oort-style weight for system efficiency')
+    parser.add_argument('--oort_exploration_weight', type=float, default=0.1,
+                        help='Oort-style exploration bonus weight')
 
     # Shapley计算参数
     parser.add_argument('--shapley_epsilon', type=float, default=0.01,
                         help='threshold for truncation in GTG-Shapley')
     parser.add_argument('--shapley_max_iter', type=int, default=5,
-                        help='maximum Monte Carlo iterations for Shapley')
+                        help='sample budget for the Shapley estimator')
     parser.add_argument('--shapley_fast', action='store_true',default=False,
                         help='use fast approximation for Shapley calculation')
+    parser.add_argument('--shapley_estimator', type=str, default='complementary',
+                        choices=['permutation', 'complementary'],
+                        help='Shapley estimator: classic permutation MC or complementary-contribution sampling')
+    parser.add_argument('--shapley_allocation', type=str, default='neyman',
+                        choices=['uniform', 'neyman'],
+                        help='stratum allocation strategy for complementary-contribution sampling')
+    parser.add_argument('--shapley_pilot_samples', type=int, default=1,
+                        help='pilot samples per stratum for complementary-contribution allocation')
 
     # Shapley值更新参数
     parser.add_argument('--shapley_update_method', type=str, default='exponential',

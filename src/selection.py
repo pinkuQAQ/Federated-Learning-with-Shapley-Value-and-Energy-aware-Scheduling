@@ -258,51 +258,49 @@ def power_of_choice_selection(client_losses: np.ndarray,
 
     return [c for c, _ in candidate_losses[:num_selected]]
 
+def oort_selection(client_losses: np.ndarray,
+                   system_costs: np.ndarray,
+                   participation_counts: np.ndarray,
+                   num_selected: int,
+                   current_round: int,
+                   utility_weight: float = 0.8,
+                   system_weight: float = 0.2,
+                   exploration_weight: float = 0.1,
+                   available_clients: List[int] = None) -> List[int]:
+    """Lightweight Oort-style client selection."""
+    num_clients = len(client_losses)
+    if available_clients is None or len(available_clients) == 0:
+        available_clients = list(range(num_clients))
 
-def fedcs_selection(per_client_cost: np.ndarray,
-                    num_selected: int,
-                    deadline: float,
-                    available_clients: List[int] = None) -> List[int]:
-    """
-    FedCS 客户端选择策略 (Nishio & Yonetani, 2019)
+    losses = np.asarray(client_losses, dtype=np.float64)
+    costs = np.asarray(system_costs, dtype=np.float64) if system_costs is not None else np.ones(num_clients)
+    counts = np.asarray(participation_counts, dtype=np.float64) if participation_counts is not None else np.zeros(num_clients)
 
-    在 per-round deadline 内，按完成时间升序贪心接纳客户端，
-    直到累计完成时间超过 deadline 或已凑满 num_selected 个。
-    本实现用 (E_trans + E_comp) 作为完成时间的代理 —— 数值上与
-    transmission/compute time 同向，便于直接复用 energy_manager 的输出。
+    def _minmax(x, default=1.0):
+        x = np.asarray(x, dtype=np.float64)
+        finite = np.isfinite(x)
+        if not finite.any():
+            return np.ones_like(x) * default
+        lo, hi = np.nanmin(x[finite]), np.nanmax(x[finite])
+        if hi - lo <= 1e-10:
+            return np.ones_like(x) * default
+        return (x - lo) / (hi - lo)
 
-    Args:
-        per_client_cost: 每个客户端的完成时间代理（一般为 E_n(t)）
-        num_selected: 期望选择的客户端数量 K
-        deadline: 单轮 deadline（与 per_client_cost 同量纲）
-        available_clients: 可用客户端列表，None 表示全部可用
+    utility = _minmax(losses, default=1.0)
+    efficiency = 1.0 - _minmax(costs, default=0.0)
+    t = max(int(current_round), 1)
+    exploration = np.sqrt(np.log(t + 1.0) / (counts + 1.0))
+    exploration = _minmax(exploration, default=1.0)
 
-    Returns:
-        selected_clients: 选择的客户端索引列表（可能少于 K）
-    """
-    if available_clients is None:
-        available_clients = list(range(len(per_client_cost)))
+    score = (
+        utility_weight * utility
+        + system_weight * efficiency
+        + exploration_weight * exploration
+    )
 
-    if len(available_clients) == 0:
-        return []
+    mask = np.zeros(num_clients, dtype=bool)
+    mask[available_clients] = True
+    score[~mask] = -np.inf
 
-    # 按完成时间升序排序
-    candidates = sorted(available_clients, key=lambda c: per_client_cost[c])
-
-    # 贪心：从最便宜开始，直到 deadline 用完或够 K 个
-    cumulative = 0.0
-    selected = []
-    for c in candidates:
-        cost_c = float(per_client_cost[c])
-        if cumulative + cost_c > deadline:
-            break
-        selected.append(c)
-        cumulative += cost_c
-        if len(selected) >= num_selected:
-            break
-
-    # 退化保护：deadline 太紧导致一个都没选到时，至少给一个最便宜的，避免空 round
-    if len(selected) == 0 and len(candidates) > 0:
-        selected = [candidates[0]]
-
-    return selected
+    selected_count = min(num_selected, len(available_clients))
+    return np.argsort(score)[-selected_count:][::-1].tolist()

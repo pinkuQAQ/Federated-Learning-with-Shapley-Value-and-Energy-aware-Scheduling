@@ -22,7 +22,6 @@ CONFIGS = [
     ("Full", "main", "hybrid_SV_Energy_Lyapunov_CDP"),
     ("w/o SV", "ablation", "random_Energy_Lyapunov_CDP"),
     ("w/o Lyap", "ablation", "hybrid_SV_Energy_CDP"),
-    ("FedCS", "main", "fedcs_Energy_CDP"),
 ]
 
 
@@ -82,7 +81,7 @@ def main():
 
     x = np.arange(len(labels))
     fig, ax = plt.subplots(figsize=(6.8, 3.6))
-    colors = ["#2563eb", "#0f766e", "#f97316", "#64748b"][: len(labels)]
+    colors = ["#2563eb", "#0f766e", "#f97316"][: len(labels)]
     bars = ax.bar(x, means, color=colors, width=0.58)
 
     ax.axhline(50, color="#dc2626", linestyle="--", linewidth=1.2, label="Eligibility threshold")

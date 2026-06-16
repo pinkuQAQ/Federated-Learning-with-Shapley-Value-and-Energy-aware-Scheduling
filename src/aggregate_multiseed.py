@@ -28,7 +28,7 @@ MAIN_TAGS = [
     ("random_CDP", "FedAvg"),
     ("random_FedProx_CDP", "FedProx"),
     ("poc_CDP", "PoC"),
-    ("fedcs_Energy_CDP", "FedCS"),
+    ("oort_Energy_CDP", "Oort"),
 ]
 
 ABLATION_TAGS = [

@@ -76,6 +76,7 @@ for %%S in (42 123 2024) do (
     --local_ep %LOCAL_EP% --local_bs %LOCAL_BS% --lr %LR% ^
     --dirichlet_alpha %ALPHA% --seed %%S --test_size %TEST_SIZE% ^
     --gpu %GPU_ID% ^
+    --shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 ^
     --shapley_update_method mean --shapley_alpha 0.5 --shapley_max_iter 20 ^
     --use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0 ^
     --use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0 ^
@@ -106,6 +107,7 @@ for %%S in (42 123 2024) do (
     --local_ep %LOCAL_EP% --local_bs %LOCAL_BS% --lr %LR% ^
     --dirichlet_alpha %ALPHA% --seed %%S --test_size %TEST_SIZE% ^
     --gpu %GPU_ID% ^
+    --shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 ^
     --shapley_update_method mean --shapley_alpha 0.5 --shapley_max_iter 20 ^
     --use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0 ^
     %DP_ARGS% ^
@@ -119,6 +121,7 @@ for %%S in (42 123 2024) do (
     --local_ep %LOCAL_EP% --local_bs %LOCAL_BS% --lr %LR% ^
     --dirichlet_alpha %ALPHA% --seed %%S --test_size %TEST_SIZE% ^
     --gpu %GPU_ID% ^
+    --shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 ^
     --shapley_update_method mean --shapley_alpha 0.5 --shapley_max_iter 20 ^
     %DP_ARGS% ^
     --output_folder !OUT!

@@ -2,7 +2,7 @@
 setlocal enabledelayedexpansion
 
 REM Full local Windows run for the main CIFAR-10 comparison.
-REM Methods: Ours, FedAvg, PoC, FedProx, FedCS.
+REM Methods: Ours, FedAvg, PoC, FedProx, Oort.
 REM All methods use the same lightweight channel-only privacy module.
 
 set "PROJECT_ROOT=%~dp0..\.."
@@ -40,7 +40,6 @@ set LOCAL_BS=32
 set LR=0.01
 set ALPHA=0.1
 set TEST_SIZE=10000
-set FEDCS_DEADLINE=5.0
 set GPU_ID=0
 set DP_CLIP_NORM=1.0
 set CHANNEL_SIGMA=0.1
@@ -57,7 +56,7 @@ echo CIFAR-10 full main comparison local run
 echo Dataset: %DATASET%, alpha: %ALPHA%, epochs: %EPOCHS%
 echo Clients: %NUM_USERS%, selected per round: %NUM_SELECTED%
 echo Seeds: 42, 123, 2024
-echo Methods: Ours, FedAvg, PoC, FedProx, FedCS
+echo Methods: Ours, FedAvg, PoC, FedProx, Oort
 echo Channel-only privacy sigma_ch: %CHANNEL_SIGMA%
 echo Output root: save\%EXP_ROOT%
 echo ========================================
@@ -81,6 +80,7 @@ for %%S in (42 123 2024) do (
     --local_ep %LOCAL_EP% --local_bs %LOCAL_BS% --lr %LR% ^
     --dirichlet_alpha %ALPHA% --seed %%S --test_size %TEST_SIZE% ^
     --gpu %GPU_ID% ^
+    --shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 ^
     --shapley_update_method mean --shapley_alpha 0.5 --shapley_max_iter 20 ^
     --use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0 ^
     --use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0 ^
@@ -125,14 +125,14 @@ for %%S in (42 123 2024) do (
     --output_folder !OUT!
   if errorlevel 1 goto failed
 
-  echo [5/5] FedCS: deadline-feasibility selection
+  echo [5/5] Oort: utility-aware selection with system efficiency
   python federated_main.py ^
     --dataset %DATASET% --model %MODEL% --epochs %EPOCHS% ^
     --num_users %NUM_USERS% --num_selected %NUM_SELECTED% ^
     --local_ep %LOCAL_EP% --local_bs %LOCAL_BS% --lr %LR% ^
     --dirichlet_alpha %ALPHA% --seed %%S --test_size %TEST_SIZE% ^
     --gpu %GPU_ID% ^
-    --no_shapley --selection_method fedcs --fedcs_deadline %FEDCS_DEADLINE% ^
+    --no_shapley --selection_method oort ^
     --use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0 ^
     %DP_ARGS% ^
     --output_folder !OUT!

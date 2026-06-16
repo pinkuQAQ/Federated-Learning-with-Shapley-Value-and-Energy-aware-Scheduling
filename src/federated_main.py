@@ -62,7 +62,7 @@ from shapley import MCShapley
 from selection import (hybrid_selection, random_selection, round_robin_selection,
                        greedy_shapley_selection, energy_aware_selection,
                        hybrid_energy_aware_selection, power_of_choice_selection,
-                       ucb_selection, fedcs_selection)
+                       ucb_selection, oort_selection)
 from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
 
@@ -499,14 +499,8 @@ def select_clients(args, epoch, num_selected, initial_rounds,
                 candidate_size=args.poc_candidate_size,
                 available_clients=available_clients,
             )
-        if args.selection_method == 'fedcs':
-            # FedCS：用 (E_trans + E_comp) 作为完成时间代理，按 deadline 贪心接纳
-            client_data_sizes = None
-            if user_groups is not None:
-                client_data_sizes = np.array(
-                    [len(user_groups[uid]) for uid in range(args.num_users)],
-                    dtype=np.float64,
-                )
+        if args.selection_method == 'oort':
+            client_data_sizes = _get_client_data_sizes(user_groups, args.num_users) if user_groups is not None else None
             if energy_manager is not None and energy_manager.channel_gains is not None:
                 per_round_energy = energy_manager.compute_energy_consumption(
                     energy_manager.channel_gains,
@@ -514,13 +508,17 @@ def select_clients(args, epoch, num_selected, initial_rounds,
                     client_data_sizes=client_data_sizes,
                 )
             else:
-                # 退化：无能量管理器时用均匀代价（FedCS 退化为 random-ish）
                 per_round_energy = np.ones(args.num_users, dtype=np.float64)
             pool = available_clients if available_clients is not None else list(range(args.num_users))
-            return fedcs_selection(
-                per_client_cost=np.asarray(per_round_energy, dtype=np.float64),
+            return oort_selection(
+                client_losses=client_local_losses,
+                system_costs=per_round_energy,
+                participation_counts=client_participation_counts,
                 num_selected=num_selected,
-                deadline=args.fedcs_deadline,
+                current_round=epoch + 1,
+                utility_weight=args.oort_utility_weight,
+                system_weight=args.oort_system_weight,
+                exploration_weight=args.oort_exploration_weight,
                 available_clients=pool,
             )
         if args.use_energy and available_clients and len(available_clients) >= num_selected:
@@ -689,7 +687,7 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
     if len(client_model_list) == 0:
         return
 
-    print(f"  [Shapley] 计算轮次 {epoch} 的Shapley值（{len(client_id_list)}个客户端）...")
+    print(f"  [Shapley] 计算轮次 {epoch} 的Shapley值（{len(client_id_list)}个客户端, estimator={args.shapley_estimator}）...")
 
     try:
         _t0 = time.time()
@@ -703,7 +701,12 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
         )
         _shapley_elapsed = time.time() - _t0
         if shapley_time_history is not None:
-            shapley_time_history.append({'round': epoch, 'time_s': _shapley_elapsed})
+            shapley_time_history.append({
+                'round': epoch,
+                'time_s': _shapley_elapsed,
+                'estimator': args.shapley_estimator,
+                'allocation': getattr(args, 'shapley_allocation', 'uniform'),
+            })
 
         updated_count = 0
         for i, client_id in enumerate(client_id_list):
@@ -900,6 +903,10 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             f.write(f"- 使用Shapley: {args.use_shapley}\n")
             if args.use_shapley:
                 f.write(f"- 选择方法: {args.selection_method}\n")
+                f.write(f"- Shapley估计器: {args.shapley_estimator}\n")
+                if args.shapley_estimator == 'complementary':
+                    f.write(f"- 互补贡献分配: {args.shapley_allocation}\n")
+                    f.write(f"- pilot samples per stratum: {args.shapley_pilot_samples}\n")
                 f.write(f"- Shapley更新方法: {args.shapley_update_method}\n")
                 f.write(f"- Shapley alpha: {args.shapley_alpha}\n")
                 f.write(f"- 快速模式: {args.shapley_fast}\n")
@@ -980,6 +987,9 @@ if __name__ == '__main__':
         print("\n" + "=" * 60)
         print("启用基于Shapley值的客户端选择")
         print(f"选择方法: {args.selection_method}")
+        print(f"Shapley估计器: {args.shapley_estimator}")
+        if args.shapley_estimator == 'complementary':
+            print(f"互补贡献分配: {args.shapley_allocation}")
         print(f"Shapley更新方法: {args.shapley_update_method}")
         print("=" * 60 + "\n")
 
@@ -1034,7 +1044,11 @@ if __name__ == '__main__':
         print("=" * 60 + "\n")
         shapley_calculator = None
         shapley_values = None
-        client_participation_counts = None
+        client_participation_counts = (
+            np.zeros(args.num_users)
+            if args.selection_method == 'oort'
+            else None
+        )
         client_last_round = None
         round_client_models = None
         val_data_loader = None
@@ -1204,6 +1218,8 @@ if __name__ == '__main__':
             if args.use_shapley:
                 client_participation_counts[idx] += 1
                 client_last_round[idx] = epoch
+            elif args.selection_method == 'oort' and client_participation_counts is not None:
+                client_participation_counts[idx] += 1
 
             if args.use_fedprox:
                 local_model = LocalUpdateFedProx(args=args, dataset=train_dataset,

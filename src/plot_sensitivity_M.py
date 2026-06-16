@@ -32,10 +32,12 @@ def smooth_ema(arr, alpha=0.1):
 
 
 def load_latest_curve(m):
-    folders = sorted(SAVE.glob(f"sens_M_channel_dp{m}_K*"))
-    if not folders:
+    root = SAVE / "sensitivity_M"
+    runs = sorted([p for p in root.iterdir() if p.is_dir()])
+    if not runs:
         return None
-    pkls = list(folders[-1].glob("*.pkl"))
+    folder = runs[-1] / f"M{m}"
+    pkls = list(folder.glob("*.pkl"))
     if not pkls:
         return None
     with open(pkls[0], "rb") as f:
@@ -94,7 +96,7 @@ def main():
 
     fig.suptitle(
         r"Sensitivity to MC-Shapley iterations $M$ -- CIFAR-10, "
-        r"$\alpha=0.1$, $\sigma_{\mathrm{dp}}=0.01$, single seed=42",
+        r"$\alpha=0.1$, channel-only privacy, single seed=42",
         fontsize=11,
     )
     fig.tight_layout()
