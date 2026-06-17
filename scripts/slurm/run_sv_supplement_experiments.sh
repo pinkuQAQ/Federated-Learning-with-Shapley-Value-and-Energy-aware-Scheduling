@@ -18,6 +18,17 @@ echo "Task: Supplementary experiments for complementary-contribution Shapley"
 echo "========================================"
 
 source ~/.bashrc
+if command -v conda >/dev/null 2>&1; then
+    CONDA_BASE=$(conda info --base)
+    source "${CONDA_BASE}/etc/profile.d/conda.sh"
+elif [ -f "${HOME}/miniconda3/etc/profile.d/conda.sh" ]; then
+    source "${HOME}/miniconda3/etc/profile.d/conda.sh"
+elif [ -f "${HOME}/anaconda3/etc/profile.d/conda.sh" ]; then
+    source "${HOME}/anaconda3/etc/profile.d/conda.sh"
+else
+    echo "ERROR: conda.sh not found. Please check your Conda installation path."
+    exit 1
+fi
 conda activate flsv
 export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
 
