@@ -1,0 +1,606 @@
+% IEEE Journal Paper Template
+\documentclass[journal]{IEEEtran}
+
+% Packages
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{algorithmic}
+\usepackage{algorithm}
+\usepackage{graphicx}
+\usepackage[nocompress]{cite}
+\usepackage{url}
+\usepackage{multirow}
+\usepackage{amsthm}
+\usepackage{placeins}
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}{Proposition}
+\newtheorem{assumption}{Assumption}
+
+\newcommand{\PaperTitle}{Shapley-Guided Energy-Constrained Client Scheduling for Federated Learning under Non-IID Data}
+\pdfinfo{
+  /Title (\PaperTitle)
+}
+
+\begin{document}
+
+\title{\PaperTitle}
+
+\author{}
+
+\maketitle
+
+\begin{abstract}
+Client selection in federated learning (FL) must balance statistical value and resource sustainability. Under non-IID data, some clients provide more useful updates, but repeatedly selecting them can create long-term energy imbalance in wireless edge systems. This paper proposes a Shapley-guided energy-constrained scheduler for synchronous cross-device FL. The server maintains persistent Shapley contribution estimates using a lightweight complementary-contribution sampler, tracks per-client energy pressure with virtual queues, and samples feasible clients according to a score-induced selection distribution. An auxiliary channel-noise accounting indicator clips client updates and models receiver-side channel uncertainty as equivalent Gaussian perturbation on the released aggregate; the reported value is used only as a reference privacy--utility indicator, not as a strong-DP or secure-aggregation guarantee. We also analyze the score-biased selection effect induced by the proposed scheduling rule. On CIFAR-10 with $\alpha=0.1$, three seeds, and $T=100$ rounds, the proposed scheduler achieves the best last-5-round accuracy among the compared baselines while retaining explicit energy accounting. Ablation results show that the Shapley signal improves the deployable energy-aware scheduler, while the Lyapunov queue supplies the long-term energy-accounting mechanism. Additional experiments compare complementary-contribution and permutation Shapley estimators, showing that complementary estimation reduces online valuation time while maintaining comparable accuracy.
+\end{abstract}
+
+\begin{IEEEkeywords}
+Federated learning, client selection, Shapley value, energy-constrained scheduling, non-IID data, Lyapunov optimization, channel noise accounting
+\end{IEEEkeywords}
+
+\section{Introduction}
+
+Federated learning (FL) \cite{mcmahan2017communication} enables distributed clients to train a shared model without uploading raw data to a central server. This paradigm is particularly attractive for edge, mobile, and Internet-of-Things systems, where data are naturally generated at devices and direct data collection can be costly or privacy-sensitive \cite{kairouz2021advances,lim2020federated,khan2021federated,chen2021distributed}. In a typical cross-device FL system, the server repeatedly selects a subset of clients, broadcasts the current global model, receives locally trained updates, and aggregates them to form the next global model.
+
+In practical wireless FL, however, client participation is not merely a sampling operation. Edge clients differ in data distribution, channel condition, residual battery state, and expected energy consumption. These factors jointly determine the usefulness and cost of one communication round. A client with highly informative non-IID data may improve the model substantially, but repeatedly selecting such a client over poor wireless links can create excessive energy consumption and reduce long-term participation sustainability. Conversely, a client with a favorable channel may be inexpensive to schedule but statistically less useful for the current learning task.
+
+This paper studies synchronous cross-device FL with one parameter server, image-classification tasks, and wireless edge clients. Energy consumption is modeled per round through a Rayleigh-fading transmission term and a CPU-based local-computation term. The central objective is contribution-aware scheduling under long-term energy pressure. We also report a lightweight channel-noise accounting indicator for the released aggregate: uploaded updates are clipped to bound sensitivity, and receiver-side channel uncertainty is modeled as equivalent Gaussian perturbation. This indicator supports relative privacy--utility interpretation of channel perturbation, but it is not a secure-aggregation protocol, a tight DP guarantee for the score-biased scheduler, or a claim that every individual clipped upload remains hidden from the server. Asynchronous FL, Byzantine robustness, and cryptographic aggregation are outside the scope of this paper.
+
+The client selection problem becomes especially challenging under non-independent and non-identically distributed (non-IID) data. Data heterogeneity makes local updates contribute unevenly to the global model \cite{li2020convergence}. Uniform random participation, as in FedAvg, ignores this statistical asymmetry. Existing client selection methods improve random sampling by using signals such as local loss, availability, runtime, channel quality, or heuristic system utility \cite{cho2022towards,chai2020tifl,fraboni2021clustered,song2023fast}. These signals are useful, but they only indirectly measure a client's marginal contribution to the aggregated model.
+
+At the same time, contribution-aware scheduling alone is insufficient for wireless edge systems. Since clients communicate over time-varying channels and operate under finite energy budgets, a scheduler that always favors high-contribution clients may repeatedly drain the same devices. Existing resource-aware FL methods consider instantaneous feasibility, straggler avoidance, channel status, or one-shot efficiency \cite{nishio2019client,zhang2021client,zheng2021energybalanced,albelaihi2022green,wang2019adaptive,chen2021joint}. What is still needed is an online scheduling mechanism that jointly accounts for statistical contribution, current channel opportunity, residual battery state, and long-term energy pressure.
+
+Motivated by this gap, this paper develops a \textbf{Shapley-guided channel- and energy-aware client scheduler}. The server estimates client contribution through a complementary-contribution-inspired Shapley sampler on a validation proxy, maintains persistent contribution statistics across rounds, filters clients by residual energy, and samples feasible clients according to a score-induced utility-minus-queue distribution. The utility term combines contribution, residual battery state, and channel quality, while Lyapunov-style virtual queues \cite{neely2010stochastic} record cumulative energy-budget pressure and penalize clients whose historical energy consumption is persistently high.
+
+The resulting mechanism has two core components and one auxiliary diagnostic component. First, the complementary-contribution Shapley estimator provides a contribution-oriented signal that is more directly tied to model utility than local loss alone while reusing coalition utilities across clients. Second, the channel- and energy-aware score lets the server balance favorable wireless opportunities against long-term participation pressure. The auxiliary channel-noise accounting indicator reports how equivalent receiver-side perturbation changes the privacy--utility reference value without elevating it to a formal deployment-level privacy guarantee. We analyze the score-biased selection effect induced by the proposed scheduling rule, and we separately provide finite-time energy accounting for the implemented virtual queues.
+
+The main contributions of this paper are summarized as follows:
+
+\begin{enumerate}
+\item We develop a persistent Shapley-based contribution estimator for non-IID FL, implemented with a complementary-contribution sampling routine, and integrate it into online client scheduling.
+
+\item We design a score-induced scheduling rule that jointly balances contribution, residual battery state, channel quality, and long-term virtual-queue pressure.
+
+\item We analyze the score-biased selection process, discuss the estimator's sampling behavior, and derive an energy-budget accounting guarantee for the virtual queue recursion.
+
+\item We validate the proposed scheduler on CIFAR-10 through ablation, estimator comparison, heterogeneity sensitivity, and channel-noise accounting experiments, showing gains over representative baselines under the tested non-IID setting.
+\end{enumerate}
+
+\begin{figure*}[!t]
+    \centering
+    \includegraphics[width=0.95\textwidth]{figures/framework_overview.pdf}
+    \caption{Conceptual framework of the proposed Shapley-guided energy-constrained client scheduling mechanism for wireless federated learning under non-IID data. The server combines persistent Shapley estimates, residual energy, channel state, and Lyapunov queue pressure to select clients, aggregate clipped updates, and refresh the scheduling state for the next round.}
+    \label{fig:framework_overview}
+\end{figure*}
+
+The remainder of this paper is organized as follows. Section~II reviews related work. Section~\ref{sec:system} presents the FL system model, energy model, scheduling problem, queue-based relaxation, and channel-noise accounting indicator. Section~\ref{sec:method} describes the dynamic scheduling mechanism. Section~\ref{sec:analysis} analyzes the score-biased selection mechanism and the energy-accounting property. Section~\ref{sec:experiments} presents simulation results. Section~\ref{sec:conclusion} concludes the paper.
+
+\section{Related Work}
+\label{sec:related}
+
+\subsection{Federated Learning and Client Selection}
+
+FedAvg established the standard FL protocol in which a server samples clients, broadcasts the current model, and averages the returned local models. Its simplicity makes it a common baseline, but random participation can be inefficient when clients have heterogeneous data distributions, computation capabilities, and communication conditions. FedProx \cite{li2020federated} addresses statistical heterogeneity by adding a proximal regularizer to local training. These limitations motivate client-selection methods that exploit heterogeneity by choosing more useful or more efficient participants.
+
+Representative selection schemes use different proxies for client quality. Power of Choice (PoC) first samples a candidate pool and then selects clients with the largest local loss under the current global model; Oort \cite{lai2021oort} combines statistical utility, system efficiency, and exploration; TiFL groups clients by system capability; clustered and heterogeneity-aware sampling methods aim to improve representativeness under non-IID data \cite{zhang2023fedcbs}. These methods demonstrate that client selection can significantly affect convergence and final accuracy. Their signals, however, are usually short-horizon proxies such as loss, latency, or heuristic utility. In contrast, our scheduler uses a contribution-oriented signal and couples it with long-term energy accounting, so the same selection rule reflects both round-level value and accumulated device burden.
+
+\subsection{Contribution-Based Client Selection}
+
+Shapley values provide a game-theoretic measure of each participant's average marginal contribution over coalition orders. They have been widely used for data valuation, incentive design, and fairness analysis in collaborative learning \cite{kwon2022beta}. In FL, Shapley-style valuation can identify clients whose updates are more beneficial to the global model, especially under non-IID data where update quality differs sharply across clients. Recent work has further improved FL contribution evaluation and sampling with cooperative or modified Shapley mechanisms \cite{liu2024fairfed,wu2026fedmsv}.
+
+The main obstacle is computational cost. Exact Shapley evaluation requires enumerating all coalitions and is therefore impractical for cross-device FL. Recent approximation work has shown that complementary-contribution stratified sampling can reuse one coalition evaluation across multiple players and thereby reduce repeated utility computation \cite{sun2024complementary}. Following that design direction, we use a lightweight complementary-contribution sampler and maintain persistent cross-round averages so that the contribution estimate can be used as an online scheduling signal. This differs from purely post-training valuation: the estimated contribution is fed back into the next-round client selection process.
+
+\subsection{Resource-Aware Federated Learning}
+
+Wireless FL must account for channel variation, energy consumption, bandwidth limitations, and device availability. Prior work has studied client selection and resource allocation under channel quality, runtime, gradient importance, data importance, and long-term wireless constraints \cite{ren2020scheduling,du2023gradient,liu2021data,taik2022data,xu2021client,zhu2024cmabenergy,zhang2025eecsfl}. These studies show that learning performance and communication efficiency should be optimized jointly rather than treated as separate layers.
+
+Our work follows this joint-design perspective but uses a different control structure. Instead of considering only instantaneous battery state, channel feasibility, or one-shot system efficiency, we maintain per-client virtual queues that accumulate energy-budget pressure over rounds. The queue mechanism converts repeated energy overuse into a future selection penalty, which allows occasional expensive selections while discouraging persistent depletion of the same clients.
+
+\subsection{Privacy-Preserving Federated Learning}
+
+Privacy in FL is commonly addressed through differential privacy, secure aggregation, or cryptographic protocols. DP-SGD and DP-FedAvg provide formal privacy accounting by clipping updates and adding calibrated Gaussian noise \cite{abadi2016deep,mcmahan2018learning}, often using R\'enyi-DP or moments-accountant style composition \cite{mironov2017renyi,wang2019subsampled}. Client-side noising can protect individual uploads against an honest-but-curious server, but strong perturbation before aggregation may significantly reduce model utility \cite{wei2020federated}. Secure aggregation protects individual updates without directly injecting training noise, but it introduces additional protocol and key-management overhead \cite{bonawitz2017practical}.
+
+Our channel-noise accounting indicator clips model updates to bound sensitivity and models receiver-side wireless uncertainty as Gaussian perturbation on the released aggregate. It provides a quantifiable privacy--utility reference under channel noise while avoiding a strong-DP or secure-aggregation claim for the individual uploaded models. Accordingly, this indicator is treated as a secondary evaluation component rather than as the main contribution of the scheduler.
+
+Table~\ref{tab:related} compares the native design features of representative selection schemes. In our experiments, all baselines are evaluated under the same channel-noise perturbation setting for fairness.
+
+\begin{table}[t]
+\centering
+\caption{Comparison with representative FL client selection schemes. The table summarizes native algorithmic features; the experimental comparison applies the same channel-noise perturbation setting to all methods so that the scheduling rule is isolated.}
+\label{tab:related}
+\scriptsize
+\setlength{\tabcolsep}{2pt}
+\begin{tabular}{l|c|c|c|c}
+\hline
+\textbf{Method} & \textbf{Selection Signal} & \textbf{Energy} & \textbf{Upload} & \textbf{Long-Term} \\
+ & & \textbf{Aware} & \textbf{Perturb.} & \textbf{Queue} \\
+\hline
+FedAvg & uniform random & $\times$ & $\times$ & $\times$ \\
+FedProx & random + prox term & $\times$ & $\times$ & $\times$ \\
+PoC & local loss & $\times$ & $\times$ & $\times$ \\
+Oort & utility + system & one-shot & $\times$ & $\times$ \\
+\textbf{Ours} & Shapley sampler + queue & long-term & channel noise & $\checkmark$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\section{System Model and Problem Formulation}
+\label{sec:system}
+
+\begin{table}[t]
+\centering
+\caption{List of Main Notations}
+\label{tab:notation}
+\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{c p{0.68\columnwidth}}
+\hline
+\textbf{Notation} & \textbf{Definition} \\
+\hline
+$N$ & Total number of clients \\
+$K$ & Per-round client selection budget \\
+$T$ & Total number of communication rounds \\
+$\mathcal{S}_t$ & Subset of selected clients in round $t$ \\
+$a_n(t)$ & Binary selection indicator of client $n$ in round $t$ \\
+$w_t$ & Global model parameter in round $t$ \\
+$F(w)$ & Global loss function \\
+$F_n(w)$ & Local loss function of client $n$ \\
+$\varphi_n(t)$ & Persistent Shapley estimate available for client $n$ at the start of round $t$ \\
+$\varphi_n^{\text{current}}(t)$ & Round-$t$ Shapley estimate computed from the selected coalition \\
+$E_n(t)$ & Energy consumption of client $n$ in round $t$ \\
+$E_{\text{remain},n}(t)$ & Residual battery energy of client $n$ at the start of round $t$ \\
+$h_n(t)$ & Complex wireless channel coefficient of client $n$ in round $t$ \\
+$\chi_n(t)$ & Normalized channel-quality signal \\
+$Q_n(t)$ & Lyapunov virtual queue of client $n$ \\
+$V$ & Scheduler control parameter \\
+$\lambda_s,\lambda_b,\lambda_c$ & Utility weights for Shapley contribution, residual battery, and channel quality \\
+$\alpha$ & Dirichlet concentration parameter controlling non-IID skew \\
+$C_t$ & Update clipping norm used to bound sensitivity in round $t$ \\
+$\gamma_{\mathrm{ch}}$ & Nominal channel-noise multiplier configured in experiments \\
+$\sigma_{\mathrm{eq},t}$ & Equivalent channel-noise multiplier in round $t$ \\
+$\varepsilon_{\mathrm{priv}}$ & Reference privacy indicator reported for channel-noise accounting at target $\delta$ \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Federated Learning Framework}
+
+We consider a synchronous FL system with one parameter server and $N$ wireless edge clients, denoted by $\mathcal{N}=\{1,2,\ldots,N\}$. Client $n$ stores a private dataset $\mathcal{D}_n$ with $|\mathcal{D}_n|$ samples and participates in training only through model updates. The learning objective is the standard data-size-weighted average of local empirical risks:
+\begin{equation}
+F(w)=\sum_{n=1}^{N}p_nF_n(w),
+\end{equation}
+where $p_n=|\mathcal{D}_n|/\sum_{i=1}^{N}|\mathcal{D}_i|$ denotes the data fraction of client $n$. The local objective is
+\begin{equation}
+F_n(w)=\mathbb{E}_{(x,y)\sim\mathcal{D}_n}[\ell(w;x,y)].
+\end{equation}
+Here $w$ is the model parameter and $\ell(w;x,y)$ is the sample-wise training loss.
+
+Training proceeds over $T$ communication rounds. At the beginning of round $t$, the server selects a subset $\mathcal{S}_t\subseteq\mathcal{N}$ with $|\mathcal{S}_t|=K_t\leq K\ll N$. The server broadcasts the current model $w_t$ to the selected clients, each selected client runs $\tau$ local SGD epochs, and client $n$ returns a local model $\tilde{w}_n^{t+1}$. The server aggregates the returned models using weighted FedAvg:
+\begin{equation}
+w_{t+1}=\sum_{n\in\mathcal{S}_t}
+\frac{|\mathcal{D}_n|}{\sum_{i\in\mathcal{S}_t}|\mathcal{D}_i|}
+\tilde{w}_n^{t+1}.
+\end{equation}
+This paper focuses on how to construct $\mathcal{S}_t$ when statistical utility, wireless channel opportunity, residual battery state, and long-term energy sustainability are coupled.
+
+For post-round contribution evaluation, the server holds a small validation proxy $\mathcal{D}_{\text{val}}$ disjoint from local training partitions and the test set. This proxy is fixed before training and requires no additional client upload during FL. In deployment, it could be replaced by a public reference set or a privacy-preserving validation protocol; our simulation instantiation is described in Section~\ref{sec:experiments}.
+
+\subsection{Data Heterogeneity and Wireless Energy Model}
+
+We model statistical heterogeneity with the standard Dirichlet partition used in FL experiments. For a classification task with $C$ classes, each client receives a class-proportion vector drawn from $\mathrm{Dir}(\alpha)$; smaller $\alpha$ creates stronger non-IID skew and larger $\alpha$ approaches the i.i.d. case.
+
+Each client communicates with the server over a time-varying Rayleigh fading channel with coefficient $h_n(t)$ and power gain $|h_n(t)|^2$. The total round energy consumption contains a transmission component and a local computation component. Specifically, the transmission component is
+\begin{equation}
+E_{\text{trans},n}(t)=\min\left(\frac{\sigma_{\text{ch}}^2}{|h_n(t)|^2},E_{\max}\right)
+\end{equation}
+and the local computation component is
+\begin{equation}
+E_{\text{comp},n}(t)=\tau\cdot\kappa\cdot f^2\cdot C_{\text{cyc}}\cdot D_n.
+\end{equation}
+The per-round energy consumption is then
+\begin{equation}
+E_n(t)=E_{\text{trans},n}(t)+E_{\text{comp},n}(t).
+\end{equation}
+Here $\sigma_{\text{ch}}^2$ is the receiver-side noise power, $E_{\max}$ clips rare extreme transmission costs, $\kappa$ is the effective switched capacitance coefficient, $f$ is the CPU frequency, $C_{\text{cyc}}$ is the number of cycles per sample, and $D_n=|\mathcal{D}_n|$.
+
+Each client maintains a residual energy state initialized at $E_{\text{init}}$. Selected clients spend $E_n(t)$ in round $t$, and clients whose residual energy falls below $E_{\text{threshold}}$ are excluded from future candidate sets. This feasibility threshold handles immediate battery exhaustion, while the virtual queue introduced below captures long-term energy-budget pressure.
+
+The residual battery state evolves as
+\begin{equation}
+E_{\text{remain},n}(t+1)=E_{\text{remain},n}(t)-a_n(t)E_n(t).
+\end{equation}
+If client $n$ is not selected in round $t$, then $a_n(t)=0$ and its residual energy remains unchanged.
+
+\subsection{Problem Formulation}
+\label{sec:problem}
+
+The central scheduling question is how to select clients when learning contribution, channel quality, residual battery state, and long-term energy sustainability are coupled. A resource-aware scheduling objective is:
+\begin{subequations}
+\begin{align}
+\max_{\{a_n(t)\}}\quad
+&\sum_{t=1}^{T}\sum_{n=1}^{N}a_n(t)U_n(t)\\
+\text{s.t.}\quad
+&\sum_{n=1}^{N}a_n(t)\leq K,\quad \forall t,\\
+&\frac{1}{T}\sum_{t=1}^{T}a_n(t)E_n(t)\leq \bar{E},\quad \forall n,\\
+&a_n(t)\in\{0,1\},\quad \forall n,t.
+\end{align}
+\end{subequations}
+Here $U_n(t)$ denotes the instantaneous utility induced by contribution, residual battery state, and channel quality, and $\bar{E}$ is the per-round average energy budget. The contribution component is not known from the future; in the online scheduler, it is instantiated by the persistent Shapley estimate accumulated from previous selected rounds.
+
+\subsection{Queue-Based Energy Constraint Relaxation}
+
+The resource-aware problem couples decisions across rounds through the average-energy constraints and cannot be solved directly without future channel states, energy evolution, and contribution estimates. We therefore introduce a virtual queue for each client:
+\begin{equation}
+Q_n(t+1)=\max\{Q_n(t)+a_n(t)E_n(t)-\bar{E},0\}.
+\end{equation}
+The queue grows when a client consumes more than its budget credit and decreases otherwise. The score used by the scheduler follows from a one-step Lyapunov drift argument. With $L(\mathbf{Q}(t))=\frac{1}{2}\sum_n Q_n^2(t)$ and $\max\{x,0\}^2\leq x^2$, the queue recursion implies
+\begin{equation}
+\Delta(t)\leq B+\sum_{n=1}^{N}Q_n(t)a_n(t)E_n(t),
+\end{equation}
+where $B$ absorbs terms independent of the scheduling decision. Minimizing the drift-minus-utility upper bound $\Delta(t)-V\sum_n a_n(t)U_n(t)$ is therefore equivalent, up to constants, to maximizing $\sum_n a_n(t)[VU_n(t)-Q_n(t)E_n(t)]$. This gives the per-client utility-minus-queue score
+\begin{equation}
+\text{Score}_n(t)=V U_n(t)-Q_n(t)E_n(t).
+\end{equation}
+The stochastic sampler uses this score as a soft selection preference, preserving exploration while retaining the same drift-based energy-pressure signal.
+
+\subsection{Channel-Noise Accounting Indicator}
+
+The channel-noise accounting indicator provides lightweight accounting for the released wireless aggregate. It clips each uploaded update to bound sensitivity and models receiver-side channel uncertainty as the only Gaussian perturbation on the released aggregate. The reported value is a reference privacy--utility indicator for the aggregate release; it is not a secure-aggregation protocol, not a tight privacy bound for the score-biased scheduler, and does not claim to hide every individual clipped upload from the server.
+
+Let $\Delta w_n(t)=\tilde{w}_n^{t+1}-w_t$ denote the model update of client $n$. Each selected update is clipped before aggregation:
+\begin{equation}
+\bar{\Delta w}_n(t)=\Delta w_n(t)\cdot
+\min\left(1,\frac{C_t}{\|\Delta w_n(t)\|_2}\right),
+\end{equation}
+where $C_t>0$ is the clipping norm. In the implementation, clipping is applied layer-wise with a percentile-and-EMA rule and then used to form a weighted clipped aggregate $\bar{\Delta w}(t)$.
+
+The released aggregate is perturbed only by equivalent channel noise:
+\begin{equation}
+\label{eq:ch_noise}
+\tilde{\Delta w}(t)=\bar{\Delta w}(t)+z_{\mathrm{ch}}(t),
+\qquad
+z_{\mathrm{ch}}(t)\sim
+\mathcal{N}\!\left(0,\sigma_{\mathrm{eq},t}^2C_t^2\omega_t^2I\right),
+\end{equation}
+where $\omega_t=\max_{n\in\mathcal{S}_t}|\mathcal{D}_n|/\sum_{i\in\mathcal{S}_t}|\mathcal{D}_i|$. Since each clipped update has norm at most $C_t$, the per-round $L_2$ sensitivity of the released aggregate to replacing one client's data is bounded by $\Delta_2\leq\omega_tC_t$. Thus the channel perturbation in~\eqref{eq:ch_noise} corresponds to a Gaussian mechanism with noise multiplier $\sigma_{\mathrm{eq},t}$.
+
+Given clipped sensitivity and Gaussian channel perturbation, we report a reference privacy indicator $\varepsilon_{\mathrm{priv}}$ at target $\delta$ through R\'enyi-DP accounting over repeated subsampled Gaussian mechanisms \cite{mironov2017renyi,wang2019subsampled}. Here $q=K/N$ is used as a reference sampling rate. Because the deployed scheduler is score-biased rather than uniformly random, this value should be read as a uniform-subsampling accounting reference for comparing channel-noise settings, not as a tight privacy bound for the score-biased mechanism.
+
+\section{Dynamic Scheduling Mechanism}
+\label{sec:method}
+
+This section describes the proposed online scheduler. At a high level, the server maintains a persistent contribution estimate for each observed client, evaluates energy feasibility and channel quality at the beginning of each round, and selects clients according to a utility-minus-queue-penalty score. After local training and aggregation, the server refreshes the contribution estimates and virtual energy queues for future rounds.
+
+\subsection{Persistent Contribution Estimation}
+
+The scheduler needs a contribution signal beyond short-horizon proxies such as current loss. We use Shapley-based utility accounting to estimate each selected client's marginal contribution to the aggregated model and approximate it with a lightweight server-side sampling routine.
+
+The Shapley value for client $n$ in round $t$ is defined over all possible coalitions:
+\begin{equation}
+\begin{aligned}
+\varphi_n^{\text{current}}(t)
+&= \sum_{S \subseteq \mathcal{S}_t \setminus \{n\}}
+\frac{|S|!(|\mathcal{S}_t| - |S| - 1)!}{|\mathcal{S}_t|!} \\
+&\quad \cdot \left[v(S \cup \{n\}) - v(S)\right]
+\end{aligned}
+\end{equation}
+where $v(S)$ denotes the utility (negative loss on a common server-side validation proxy) of the aggregated model from coalition $S$. Exact evaluation requires all $2^{|\mathcal{S}_t|}$ coalitions, which is impractical even for moderate $K=|\mathcal{S}_t|$.
+
+To reduce repeated utility evaluation, we use a \emph{complementary-contribution} approximation as the default implementation. For a sampled coalition $S \subseteq \mathcal{S}_t$, define
+\begin{equation}
+\mathrm{CC}(S) = v(S) - v(\mathcal{S}_t \setminus S).
+\end{equation}
+One evaluation pair $(S,\mathcal{S}_t \setminus S)$ can then contribute to the estimates of multiple clients at once: clients inside $S$ receive the sample in the $|S|$-stratum, while clients outside $S$ receive the sign-reversed sample in the complementary stratum. This reuse is the main reason the approximation is cheaper than evaluating one marginal contribution per sampled permutation position.
+
+In practice, we sample coalition sizes from a small set of representative strata and maintain the mean complementary contribution within each observed stratum. The round-$t$ estimate of client $n$ is formed by averaging the available stratum means associated with that client. We support both uniform budget allocation and a Neyman-style variance-aware allocation that places more samples on strata with larger pilot variance, following the same broad design intuition as the complementary-contribution literature \cite{sun2024complementary}. For ablation and sanity checks, the code also retains the classical Monte Carlo permutation estimator.
+
+The current-round Shapley estimate is only available after the selected clients finish local training and the server evaluates their coalition utilities. Importantly, this post-round valuation is computed only from the updates uploaded by the selected clients in $\mathcal{S}_t$; unselected clients do not perform local training or upload updates for Shapley evaluation in that round. To make the signal usable for future scheduling, we persist each client's contribution estimate across rounds. Let $c_n(t)$ denote the number of valid post-round contribution estimates of client $n$ available at the start of round $t$. If client $n$ is selected in round $t$, then after computing $\varphi_n^{\text{current}}(t)$ we update
+\begin{equation}
+\varphi_n(t+1) =
+\frac{c_n(t)\varphi_n(t) + \varphi_n^{\text{current}}(t)}{c_n(t)+1}
+\end{equation}
+with $c_n(t+1)=c_n(t)+1$. Unselected clients keep their previous values. The resulting statistic is an online proxy built from past observations, not a current-round Shapley value known before selection.
+
+\subsection{Energy Eligibility and Penalty State}
+
+Before scoring, the server first removes clients whose residual energy is below the participation threshold:
+\begin{equation}
+\mathcal{A}(t) = \{n \mid E_{\text{remain},n}(t) \geq E_{\text{threshold}}\}
+\end{equation}
+
+At the beginning of each round, the server samples or observes the channel coefficients and computes the corresponding energy expenditure. This produces the feasible set and the energy term used in the scheduling score.
+
+\subsection{Unified Online Scheduling Rule}
+
+For each eligible client $n \in \mathcal{A}(t)$, the scheduler computes
+\begin{align}
+U_n(t)
+&=\lambda_s\varphi_n(t)+\lambda_b B_n(t)+\lambda_c \chi_n(t),\\
+\text{Score}_n(t)
+&= V U_n(t) - Q_n(t) \cdot E_n(t).
+\end{align}
+Here $\varphi_n(t)$ is the persistent Shapley value, $B_n(t)$ is the residual battery state, $\chi_n(t)$ is a normalized channel-quality signal derived from the channel power gain, $E_n(t)$ is the predicted energy expenditure, and $Q_n(t)$ is the virtual queue. The first term encourages useful and currently efficient participation, while the second term discourages clients that have accumulated high energy pressure. This raw-score form follows the Lyapunov drift-plus-penalty derivation in Section~\ref{sec:problem}.
+
+After scoring, the server samples clients without replacement according to a score-induced distribution. This keeps the implementation aligned with the stochastic selection model used in the analysis section. For the first draw, the probability of choosing eligible client $n$ is
+\begin{equation}
+p_n^{\mathrm{sel}}(t)
+=\frac{\exp(\mathrm{Score}_n(t)/\beta)}
+{\sum_{j\in\mathcal{A}(t)}\exp(\mathrm{Score}_j(t)/\beta)},
+\end{equation}
+where $\beta>0$ controls the selection sharpness. The server repeats this draw over the remaining eligible clients until $\min\{K,|\mathcal{A}(t)|\}$ clients are selected. Smaller $\beta$ makes the policy more concentrated on high-score clients, while larger $\beta$ keeps more exploration. The first $R$ rounds use round-robin initialization.
+
+\subsection{Virtual Queue Update}
+
+After each round $t$, we update each virtual queue as
+\begin{equation}
+Q_n(t+1) = \max\left\{Q_n(t) + a_n(t)E_n(t) - \bar{E}, \; 0\right\}
+\end{equation}
+where $a_n(t) \in \{0,1\}$ indicates whether client $n$ participates in round $t$. Here $E_n(t)$ is the actual energy consumed in round $t$, and $\bar{E}$ is the configured per-round budget.
+
+Occasional expensive selections are tolerated, while persistent over-budget behavior creates an increasing future penalty.
+
+\subsection{Channel-Noise Perturbation Aggregation}
+
+After the selected clients finish local training, the channel-noise accounting module of Section~\ref{sec:system} is applied to the returned updates. The full model update is clipped before aggregation, and the round clipping norm $C_t$ is estimated from selected update norms using percentile smoothing. The server aggregates the clipped updates and releases the aggregate after adding only the equivalent channel perturbation. For weighted aggregation, the accounting scale is $\sigma_{\mathrm{eq},t}C_t\omega_t$, where $\omega_t$ is the largest selected-client aggregation weight; for balanced selected clients this reduces to the simpler $\sigma_{\mathrm{eq},t}C_t/K_t$ expression.
+
+Post-round contribution evaluation in our simulator uses the clipped client updates before equivalent channel noise is applied. This avoids letting receiver-side perturbation dominate the contribution estimate while keeping the released global update consistent with the channel-noise accounting setting.
+
+\subsection{Complete Algorithm Framework}
+
+Combining the steps above yields a single online scheduling loop. Algorithm~\ref{alg:round} summarizes one communication round of the proposed scheduler. It separates the round into eligibility checking, score-based selection, clipped aggregation, and state refresh. The detailed complementary-contribution sampling routine is treated as a server-side subroutine, so the algorithm remains readable while still exposing the main control flow.
+
+\begin{algorithm}
+\caption{One Round of the Proposed Scheduler}
+\label{alg:round}
+\begin{algorithmic}[1]
+\STATE \textbf{Input:} $w_t$, $\{\varphi_n(t),c_n(t),Q_n(t),E_{\mathrm{remain},n}(t)\}_{n=1}^N$
+\STATE \textbf{Output:} $w_{t+1}$ and refreshed scheduling state
+\STATE Observe channel states and predict $E_n(t)$ for all clients
+\STATE Build eligible set $\mathcal{A}(t)=\{n:E_{\mathrm{remain},n}(t)\geq E_{\mathrm{threshold}}\}$
+\IF{$t \leq R$}
+    \STATE Select $\mathcal{S}_t$ by round-robin warm start from $\mathcal{A}(t)$
+\ELSE
+    \FOR{each $n\in\mathcal{A}(t)$}
+        \STATE Compute $U_n(t)=\lambda_s\varphi_n(t)+\lambda_bB_n(t)+\lambda_c\chi_n(t)$
+        \STATE Compute $\mathrm{Score}_n(t)=VU_n(t)-Q_n(t)E_n(t)$
+    \ENDFOR
+    \STATE Sample $\mathcal{S}_t$ without replacement using $p_n^{\mathrm{sel}}(t)\propto \exp(\mathrm{Score}_n(t)/\beta)$
+\ENDIF
+\STATE Broadcast $w_t$ to selected clients in $\mathcal{S}_t$
+\FORALL{$n \in \mathcal{S}_t$ in parallel}
+    \STATE Run local SGD and return clipped update $\bar{\Delta w}_n$
+\ENDFOR
+\STATE Aggregate clipped updates by weighted FedAvg to obtain $\bar{\Delta w}(t)$
+\STATE Add equivalent channel perturbation: $\tilde{\Delta w}(t)=\bar{\Delta w}(t)+z_{\mathrm{ch}}(t)$
+\STATE $w_{t+1} \leftarrow w_t+\tilde{\Delta w}$
+\STATE Refresh $\{\varphi_n(t+1),c_n(t+1)\}$ using complementary-contribution Shapley estimation on $\mathcal{S}_t$
+\STATE Update residual batteries and virtual queues for all clients
+\STATE \textbf{return} $w_{t+1}$ and refreshed state
+\end{algorithmic}
+\end{algorithm}
+
+\section{Mechanism Analysis}
+\label{sec:analysis}
+
+This section gives a compact analysis of the score-biased client selection model induced by the proposed scheduler. The goal is to explain the main mechanism rather than to prove every implementation detail of multi-epoch FedAvg, adaptive clipping, and channel perturbation.
+
+\subsection{Score-Induced Selection Model}
+
+The practical persistent contribution score $\varphi_n(t)$ is interpreted as a round-start proxy for the contribution signal available in the selection history. Together with the normalized residual-battery state and channel-quality signal, it defines the utility-minus-queue score used in Section~\ref{sec:method}. The positive utility term favors informative and efficient clients, while the queue penalty discourages repeated energy overuse.
+
+For analysis, the score induces the categorical selection distribution
+\begin{equation}
+  p_n^{\mathrm{sel}}(t)
+  = \frac{\exp\!\bigl(\mathrm{Score}_n(t)/\beta\bigr)}
+         {\displaystyle\sum_{j\in\mathcal{A}(t)}\exp\!\bigl(\mathrm{Score}_j(t)/\beta\bigr)},
+  \quad n\in\mathcal{A}(t),
+  \label{eq:softmax_sel}
+\end{equation}
+and $p_n^{\mathrm{sel}}(t)=0$ for $n\notin\mathcal{A}(t)$. Here $\beta > 0$ controls how strongly the policy concentrates on high-score clients. The practical without-replacement sampler in Algorithm~\ref{alg:round} is viewed as a finite-budget implementation of this score-biased selection model.
+
+\subsection{Convergence Under Bounded Selection Bias}
+
+Under standard smoothness and bounded-variance conditions, score-biased client selection follows the usual non-convex stochastic-optimization intuition: the optimization error decreases with more rounds, while a residual term remains if the score-biased selected objective differs from the full FL objective. This is the role of the selection-bias term in the analysis: it summarizes how aggressively the scheduler departs from uniform participation in favor of high-score clients.
+
+This statement is used as a mechanism-level explanation rather than as a complete proof for the full implementation, which includes multi-epoch local training, adaptive clipping, channel perturbation, and without-replacement sampling. The empirical study therefore remains the primary evidence for the scheduler's practical behavior.
+\subsection{Estimator Notes and Energy Accounting}
+
+The implementation uses a complementary-contribution sampler, whose practical advantage is utility reuse across clients rather than a classical permutation-style concentration bound.
+
+\begin{proposition}[Finite-time energy accounting]
+For any client $n$ and horizon $T$, the virtual queue recursion in Section~\ref{sec:problem} implies
+\begin{equation}
+\frac{1}{T}\sum_{t=1}^{T}a_n(t)E_n(t)
+\leq
+\bar{E}+\frac{Q_n(T+1)-Q_n(1)}{T}.
+\end{equation}
+If $Q_n(1)=0$, the average energy-budget violation is upper-bounded by $Q_n(T+1)/T$.
+\end{proposition}
+
+\begin{proof}
+Since $Q_n(t+1)=\max\{Q_n(t)+a_n(t)E_n(t)-\bar{E},0\}$, we have
+\begin{equation}
+Q_n(t+1)\geq Q_n(t)+a_n(t)E_n(t)-\bar{E}.
+\end{equation}
+Rearranging and summing over $t=1,\ldots,T$ gives
+\begin{equation}
+\sum_{t=1}^{T}a_n(t)E_n(t)
+\leq
+T\bar{E}+Q_n(T+1)-Q_n(1).
+\end{equation}
+Dividing both sides by $T$ proves the result.
+\end{proof}
+
+This proposition does not impose a hard per-round energy cap. Instead, it shows that a bounded queue gives a finite-time accounting signal for the average energy constraint and converts persistent over-budget participation into future scheduling penalty.
+
+\subsection{Complexity}
+
+The dominant extra cost beyond FedAvg is server-side contribution evaluation on the validation proxy. Under a classical permutation baseline with $M$ samples over $K$ selected clients, the overhead scales as $O(N+KM C_{\mathrm{val}})$, where $C_{\mathrm{val}}$ denotes one validation utility evaluation. The implemented complementary-contribution sampler reuses each coalition/complement evaluation across multiple clients, so its realized validation overhead is typically lower for the same nominal sampling budget, although the exact cost depends on the chosen representative strata and allocation rule. The communication cost remains $O(Kd)$ per round, where $d$ is the model dimension.
+
+\section{Simulation Results}
+\label{sec:experiments}
+
+\subsection{Experimental Setup}
+
+\subsubsection{Dataset and Model}
+
+We conduct experiments on the CIFAR-10 dataset (60,000 images, 10 classes) with a CNN comprising two convolutional layers (16 and 32 filters), two max-pooling layers, and two fully connected layers ($2048 \to 128 \to 10$) with ReLU activations and dropout (0.5). To instantiate the coalition utility used in Shapley evaluation, the server-side simulator holds a small validation proxy of up to 1{,}000 samples. In our simulation this proxy is constructed once before training by pooling the 10\%--20\% slot of each client's locally partitioned dataset; these samples are never used for local SGD or as part of the held-out test set, so they create no test-set leakage. We treat this as a simulation convenience rather than a deployment requirement: in practice the same role can be filled by a public reference set or by a privacy-preserving evaluation oracle, neither of which we model here.
+
+\subsubsection{Federated Learning and System Parameters}
+
+We simulate $N=100$ clients with $K=5$ selected per round over $T=100$ rounds. Local training uses SGD (momentum 0.5, learning rate 0.01) with batch size 32 and $\tau=2$ local epochs. Data are partitioned via a Dirichlet distribution with $\alpha=0.1$, which creates a challenging non-IID CIFAR-10 regime for evaluating contribution-aware scheduling.
+
+For our method, the control parameter is set to $V=10.0$ with an energy budget of $\bar{E}=5.0$ J per round. The instantaneous scheduling utility uses weights $\lambda_s=0.70$, $\lambda_b=0.15$, and $\lambda_c=0.15$ for Shapley contribution, residual battery state, and channel quality, respectively. Each client is initialized with $E_{\text{init}}=500$ J and an energy threshold of $E_{\text{threshold}}=50$ J. The channel follows a Rayleigh fading model with receiver noise power $\sigma_{\text{ch}}^2=1.0$. Shapley values are estimated by the default complementary-contribution sampler with a small budget of representative strata and are persisted with a running mean over observed rounds. The first $R=\lceil N/K\rceil=20$ rounds use round-robin initialization to bootstrap contribution estimates. We further vary the sampling budget in a sensitivity study to examine the accuracy-cost tradeoff of the Shapley estimator.
+
+The main scheduler comparison is conducted on CIFAR-10 with $\alpha=0.1$ and uses the same model, local training, energy model, validation proxy, and channel-noise accounting setting across all methods. Specifically, every compared method clips uploaded updates and uses the same nominal channel-noise multiplier $\gamma_{\mathrm{ch}}=0.1$, with no extra algorithmic Gaussian noise. The update clipping norm initializes at $C=1.0$ and uses layer-wise adaptive clipping with percentile $p=80$, EMA factor $\rho=0.8$, growth cap $1.2$, and range $[0.05,1.0]$. Perturbation comes only from the realized equivalent multiplier $\sigma_{\mathrm{eq},t}$, and the target failure probability is $\delta=10^{-5}$. A separate single-seed check at $\alpha=0.5$ confirms the expected accounting pattern: clipping has a moderate effect, while stronger equivalent channel noise lowers the reported reference $\varepsilon_{\mathrm{priv}}$ and also reduces accuracy. The reported $\varepsilon_{\mathrm{priv}}$ values are used mainly as relative indicators for channel-induced perturbation, not as evidence of practical strong privacy.
+
+\subsubsection{Baseline Methods}
+
+We compare against four baselines: \textbf{FedAvg} (uniform random selection); \textbf{Power of Choice (PoC)} (samples a candidate pool of size $d=3K=30$ and selects the top-$K$ clients with the largest local loss under the current global model); \textbf{FedProx} (random selection with proximal regularization $\mu=0.01$); and \textbf{Oort} (utility-aware client selection using statistical utility, system efficiency, and exploration). Unless otherwise stated, all methods use the same model architecture, local training hyperparameters, data partition, and energy model, so the comparison isolates the effect of the scheduling rule rather than unrelated system differences. We do not include a UCB1-style baseline because the empirical performance of a UCB selector in this regime is highly sensitive to the choice of reward signal (e.g., post-SGD local loss vs.\ pre-training global-model loss), which is itself a design decision orthogonal to the contribution-aware scheduling we study; we leave a careful UCB-FL reward design to future work.
+
+\label{sec:results}
+
+\subsection{Main Comparison Table}
+
+Table~\ref{tab:main} reports the main CIFAR-10 scheduling results with $\alpha=0.1$ and $T=100$, averaged over three seeds. All methods use the same model, local training protocol, data partition, energy model, and channel-noise accounting setting; the comparison therefore isolates the scheduling rule under the same perturbation protocol. The proposed scheduler obtains the best last-5-round and final accuracy.
+
+\begin{table}[t]
+\centering
+\caption{Main accuracy comparison on CIFAR-10 ($\alpha=0.1$, $K=5$, $T=100$, $\gamma_{\mathrm{ch}}=0.1$, 3 seeds). All methods use the same channel-noise perturbation setting to isolate the scheduling rule.}
+\label{tab:main}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{l|c|c}
+\hline
+\textbf{Method} & \textbf{Last-5 acc.\ (\%)} & \textbf{Final acc.\ (\%)} \\
+\hline
+Ours    & \textbf{32.35 $\pm$ 1.47} & \textbf{35.49 $\pm$ 3.88} \\
+FedAvg  & 26.34 $\pm$ 0.59          & 27.62 $\pm$ 1.83 \\
+FedProx & 26.71 $\pm$ 0.78          & 27.91 $\pm$ 2.36 \\
+PoC     & 29.30 $\pm$ 0.55          & 30.08 $\pm$ 1.40 \\
+Oort    & 27.68 $\pm$ 2.31          & 26.13 $\pm$ 1.83 \\
+\hline
+\end{tabular}
+\end{table}
+
+Fig.~\ref{fig:baseline_convergence} shows the corresponding accuracy trajectories.
+
+Ours improves the last-5-round accuracy over FedAvg by 6.01 percentage points and over PoC by 3.05 percentage points. The gain over the strongest baseline in this table is moderate rather than dramatic, but it is obtained while maintaining explicit residual-energy feasibility and long-term queue accounting.
+
+\begin{figure}[!htbp]
+    \centering
+    \includegraphics[width=\columnwidth]{figures/baseline_convergence.pdf}
+    \caption{CIFAR-10 test accuracy ($\alpha=0.1$, $K=5$, $T=100$, channel-noise perturbation enabled). Curves show EMA-smoothed means over three seeds.}
+    \label{fig:baseline_convergence}
+\end{figure}
+
+\subsection{Ablation: Where the Gain Comes From}
+
+Table~\ref{tab:ablation} isolates the main design choices.
+
+\begin{table}[!htbp]
+\centering
+\caption{Ablation on CIFAR-10 ($\alpha=0.1$, $T=100$, 3 seeds, last-5 mean$\pm$std).}
+\label{tab:ablation}
+\small
+\setlength{\tabcolsep}{4pt}
+\begin{tabular}{l|c}
+\hline
+\textbf{Variant} & \textbf{Last-5 acc.\ (\%)} \\
+\hline
+Full (SV + Lyap + Energy) & 32.35 $\pm$ 1.47 \\
+w/o SV                    & 31.29 $\pm$ 1.16 \\
+w/o Lyap                  & 29.83 $\pm$ 0.35 \\
+w/o Energy (SV-only)      & \textbf{36.13 $\pm$ 4.43} \\
+\hline
+\end{tabular}
+\end{table}
+
+Removing the Shapley signal costs 1.06 percentage points, while removing the Lyapunov queue costs 2.52 percentage points. The SV-only variant obtains the highest accuracy in this table, but it removes the energy feasibility and long-term queue accounting; the full scheduler is therefore the deployable energy-aware version rather than the unconstrained accuracy upper point.
+
+In the tested setting, the energy-aware variants keep clients above the depletion threshold. The role of the Lyapunov queue is therefore not to maximize residual energy in isolation, but to provide an explicit long-term accounting mechanism that penalizes persistent over-budget participation while preserving learning utility.
+
+\subsection{Heterogeneity Sensitivity}
+
+Table~\ref{tab:sens_alpha} reports a diagnostic sweep of the Dirichlet concentration parameter $\alpha \in \{0.1, 0.25, 0.5, 1.0\}$ at the same operating point ($T=100$, $V=10$, seed=42). To keep the sweep internally consistent, the $\alpha=0.1$ point reuses the seed=42 main run rather than the multi-seed mean in Table~\ref{tab:main}. The sweep is intended to show the direction of the heterogeneity response under a fixed random partition; a multi-seed version is required for a statistically stable ranking across $\alpha$ values.
+
+\begin{table}[!htbp]
+\centering
+\caption{Diagnostic heterogeneity sensitivity on CIFAR-10: last-5 accuracy (\%) versus Dirichlet $\alpha$ at a fixed operating point ($T=100$, seed=42).}
+\label{tab:sens_alpha}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{c|c|c|c|c|c}
+\hline
+$\alpha$ & \textbf{Ours} & \textbf{FedAvg} & \textbf{FedProx} & \textbf{PoC} & \textbf{Oort} \\
+\hline
+0.10 & \textbf{30.29} & 26.03 & 25.70 & 24.37 & 23.46 \\
+0.25 & \textbf{42.27} & 31.91 & 31.45 & 32.71 & 35.37 \\
+0.50 & \textbf{47.45} & 41.75 & 41.85 & 40.66 & 40.82 \\
+1.00 & \textbf{48.40} & 44.63 & 44.40 & 45.02 & 41.60 \\
+\hline
+\end{tabular}
+\end{table}
+
+In this sampled run, the scheduler improves over all four baselines across the tested heterogeneous partitions. The gain is largest at $\alpha=0.25$ and remains visible as $\alpha$ increases at this operating point, while all methods become closer when local data are more balanced. Because partition randomness can affect non-IID FL outcomes, these numbers should be interpreted as an operating-point sensitivity check rather than as final cross-$\alpha$ statistical evidence.
+
+\subsection{Shapley Estimator Comparison}
+
+Table~\ref{tab:sv_estimator} compares the classical permutation estimator with two complementary-contribution variants at the same nominal sampling budget $M=20$. The complementary-contribution estimators are not intended to guarantee higher accuracy in every run; their main role is to reuse coalition utility evaluations and reduce the online contribution-estimation overhead.
+
+\begin{table}[!htbp]
+\centering
+\caption{Shapley estimator comparison on CIFAR-10 ($\alpha=0.1$, $K=5$, $T=100$, $M=20$, 3 seeds).}
+\label{tab:sv_estimator}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{l|c|c|c}
+\hline
+\textbf{Estimator} & \textbf{Last-5 acc.\ (\%)} & \textbf{Time/round (s)} & \textbf{Total time (s)} \\
+\hline
+Permutation & 32.70 $\pm$ 3.46 & 6.52 $\pm$ 0.14 & 645.6 $\pm$ 14.0 \\
+CC-uniform & \textbf{34.07 $\pm$ 1.91} & 5.42 $\pm$ 0.06 & 536.4 $\pm$ 6.1 \\
+CC-Neyman & 33.81 $\pm$ 2.12 & \textbf{4.83 $\pm$ 0.12} & \textbf{478.2 $\pm$ 12.1} \\
+\hline
+\end{tabular}
+\end{table}
+
+Both complementary-contribution variants maintain accuracy comparable to or slightly above the permutation estimator, while reducing Shapley evaluation time. In particular, CC-Neyman gives the lowest average per-round estimation time, whereas CC-uniform gives the highest last-5 accuracy in this comparison. We therefore interpret the complementary estimator primarily as an efficiency-oriented online valuation module rather than as a standalone accuracy booster.
+
+\subsection{Shapley Sampling-Budget Sensitivity}
+
+Table~\ref{tab:budget} reports a diagnostic sweep over sampling budgets $M\in\{5,10,20,50\}$ for the CC-Neyman estimator at seed 42. Increasing $M$ raises the Shapley evaluation time, but the accuracy trend is non-monotonic. This behavior is expected in an online scheduler because a lower-variance contribution estimate does not automatically imply a better finite-round client-selection trajectory under non-IID data, channel variation, and queue penalties.
+
+\begin{table}[!htbp]
+\centering
+\caption{Diagnostic sampling-budget sensitivity for CC-Neyman on CIFAR-10 ($\alpha=0.1$, $K=5$, $T=100$, seed=42).}
+\label{tab:budget}
+\footnotesize
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{c|c|c|c}
+\hline
+\textbf{Budget} & \textbf{Last-5 acc.\ (\%)} & \textbf{Final acc.\ (\%)} & \textbf{Time/round (s)} \\
+\hline
+$M=5$  & 31.99 & 33.89 & 2.36 \\
+$M=10$ & \textbf{40.72} & \textbf{38.96} & 3.54 \\
+$M=20$ & 33.63 & 34.39 & 4.81 \\
+$M=50$ & 29.84 & 32.62 & 5.96 \\
+\hline
+\end{tabular}
+\end{table}
+
+The budget sweep should be read as an operating-point sensitivity check rather than a statistically stable ranking of budgets. It supports using a moderate contribution-estimation budget and motivates the default lightweight setting instead of treating larger Shapley sampling budgets as uniformly beneficial. Overall, the experiments show gains over baselines in the tested CIFAR-10 settings and illustrate how the energy queue, Shapley-sampling budget, and auxiliary channel-noise accounting indicator affect the scheduler.
+
+\section{Conclusion}
+\label{sec:conclusion}
+
+This paper studied client scheduling for synchronous cross-device FL under non-IID data, wireless channel variation, and long-term energy constraints. We proposed a Shapley-guided channel- and energy-aware scheduler that maintains persistent contribution estimates through a complementary-contribution sampler, evaluates residual battery and channel states at each round, and uses Lyapunov virtual queues to penalize repeated energy overuse. The resulting score enables the server to favor informative clients when they are feasible and timely, while preserving an explicit accounting mechanism for long-horizon energy pressure.
+
+We also incorporated a lightweight channel-noise accounting indicator. Uploaded updates are clipped to bound sensitivity, and receiver-side channel uncertainty is modeled as equivalent Gaussian perturbation on the released aggregate. This design provides a relative privacy--utility reference for channel perturbation rather than a secure-aggregation protocol, strong individual-upload privacy, or a tight DP guarantee for the score-biased scheduler.
+
+Experiments on CIFAR-10 show that the proposed scheduler improves over random-selection and utility-based baselines in a difficult non-IID regime. Ablation studies indicate that the Shapley signal improves accuracy, while the Lyapunov queue supplies the energy-accounting mechanism required by the deployable scheduler. Diagnostic sensitivity experiments further show how performance changes with data heterogeneity, contribution-estimation budget, and equivalent channel noise. Overall, the results support the scheduler as a candidate mechanism for balancing contribution, channel opportunity, and energy sustainability in resource-constrained FL.
+
+Future work will extend the framework toward asynchronous FL, richer device heterogeneity, tighter theoretical links between online complementary-contribution estimation and score-induced stochastic scheduling, and protocol-level integration of secure aggregation with contribution evaluation.
+
+\bibliographystyle{IEEEtran}
+\bibliography{references}
+
+\end{document}
