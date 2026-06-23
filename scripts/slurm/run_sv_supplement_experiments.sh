@@ -129,6 +129,12 @@ if [ "${RUN_MAIN}" = "1" ]; then
             --no_shapley --selection_method oort \
             ${ENERGY_ARGS} ${DP_ARGS} \
             --output_folder ${OUT}
+
+        run_cmd "GCA: gradient/channel/energy-aware selection, seed=${SEED}" "${OUT}" \
+            ${BASE_ARGS} --seed ${SEED} \
+            --no_shapley --selection_method gca \
+            ${ENERGY_ARGS} ${DP_ARGS} \
+            --output_folder ${OUT}
     done
 fi
 

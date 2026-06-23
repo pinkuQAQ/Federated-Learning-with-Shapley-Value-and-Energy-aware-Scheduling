@@ -304,3 +304,50 @@ def oort_selection(client_losses: np.ndarray,
 
     selected_count = min(num_selected, len(available_clients))
     return np.argsort(score)[-selected_count:][::-1].tolist()
+
+
+def gradient_channel_aware_selection(learning_signals: np.ndarray,
+                                     channel_gains: np.ndarray,
+                                     energy_costs: np.ndarray,
+                                     num_selected: int,
+                                     learning_weight: float = 0.5,
+                                     channel_weight: float = 0.3,
+                                     energy_weight: float = 0.2,
+                                     available_clients: List[int] = None) -> List[int]:
+    """Gradient/channel/energy-aware scheduler adapted from AirComp FEEL.
+
+    The original AirComp scheduler ranks devices by update importance, channel
+    quality, and energy cost. In the digital-FL baseline we use stale local loss
+    as the available learning-importance proxy and keep standard FedAvg
+    aggregation unchanged.
+    """
+    num_clients = len(learning_signals)
+    if available_clients is None or len(available_clients) == 0:
+        available_clients = list(range(num_clients))
+
+    def _minmax(x, default=1.0):
+        x = np.asarray(x, dtype=np.float64)
+        finite = np.isfinite(x)
+        if not finite.any():
+            return np.ones_like(x) * default
+        lo, hi = np.nanmin(x[finite]), np.nanmax(x[finite])
+        if hi - lo <= 1e-10:
+            return np.ones_like(x) * default
+        return (x - lo) / (hi - lo)
+
+    learning = _minmax(learning_signals, default=1.0)
+    channel = _minmax(np.abs(channel_gains), default=1.0)
+    energy = _minmax(energy_costs, default=0.0)
+
+    score = (
+        learning_weight * learning
+        + channel_weight * channel
+        - energy_weight * energy
+    )
+
+    mask = np.zeros(num_clients, dtype=bool)
+    mask[available_clients] = True
+    score[~mask] = -np.inf
+
+    selected_count = min(num_selected, len(available_clients))
+    return np.argsort(score)[-selected_count:][::-1].tolist()

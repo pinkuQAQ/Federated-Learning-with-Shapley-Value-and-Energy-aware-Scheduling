@@ -1,6 +1,6 @@
 ﻿#!/usr/bin/env python
 # -*- coding: utf-8 -*-
-"""Plot main-comparison curves from save/main/<run_tag>/seed*."""
+"""Plot main-comparison curves from saved main-comparison runs."""
 import pickle
 from pathlib import Path
 from collections import defaultdict
@@ -20,6 +20,7 @@ METHODS = [
     ('random_FedProx_CDP',             'FedProx',  'C2', '-.'),
     ('poc_CDP',                        'PoC',      'C3', ':'),
     ('oort_Energy_CDP',                'Oort',     'C5', '-.'),
+    ('gca_Energy_CDP',                 'GCA',      'C4', (0, (3, 1, 1, 1))),
 ]
 
 
@@ -47,17 +48,26 @@ def main():
     import argparse
     parser = argparse.ArgumentParser()
     parser.add_argument('--tag', default=None, help='Run tag under save/main/. Defaults to latest.')
+    parser.add_argument('--root', default=None,
+                        help='Optional main-result root, e.g. save/sv_supp/<tag>/main.')
     args = parser.parse_args()
 
     data = defaultdict(list)
-    main_root = SAVE / 'main'
-    if args.tag:
-        run_dir = main_root / args.tag
+    if args.root:
+        run_dir = Path(args.root)
+    elif args.tag and (SAVE / 'sv_supp' / args.tag / 'main').exists():
+        run_dir = SAVE / 'sv_supp' / args.tag / 'main'
     else:
-        run_dirs = sorted([p for p in main_root.iterdir() if p.is_dir()])
-        if not run_dirs:
-            raise FileNotFoundError('No run directories found under save/main')
-        run_dir = run_dirs[-1]
+        main_root = SAVE / 'main'
+        if args.tag:
+            run_dir = main_root / args.tag
+        else:
+            run_dirs = sorted([p for p in main_root.iterdir() if p.is_dir()])
+            if not run_dirs:
+                raise FileNotFoundError('No run directories found under save/main')
+            run_dir = run_dirs[-1]
+    if not run_dir.exists():
+        raise FileNotFoundError(f'Run directory not found: {run_dir}')
     folders = sorted([p for p in run_dir.iterdir() if p.is_dir()])
     print(f'using {run_dir}')
     for folder in folders:

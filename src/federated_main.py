@@ -62,7 +62,8 @@ from shapley import MCShapley
 from selection import (hybrid_selection, random_selection, round_robin_selection,
                        greedy_shapley_selection, energy_aware_selection,
                        hybrid_energy_aware_selection, power_of_choice_selection,
-                       ucb_selection, oort_selection)
+                       ucb_selection, oort_selection,
+                       gradient_channel_aware_selection)
 from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
 
@@ -519,6 +520,29 @@ def select_clients(args, epoch, num_selected, initial_rounds,
                 utility_weight=args.oort_utility_weight,
                 system_weight=args.oort_system_weight,
                 exploration_weight=args.oort_exploration_weight,
+                available_clients=pool,
+            )
+        if args.selection_method == 'gca':
+            client_data_sizes = _get_client_data_sizes(user_groups, args.num_users) if user_groups is not None else None
+            if energy_manager is not None and energy_manager.channel_gains is not None:
+                channel_gains = energy_manager.channel_gains
+                per_round_energy = energy_manager.compute_energy_consumption(
+                    channel_gains,
+                    selected_clients=None,
+                    client_data_sizes=client_data_sizes,
+                )
+            else:
+                channel_gains = np.ones(args.num_users, dtype=np.float64)
+                per_round_energy = np.ones(args.num_users, dtype=np.float64)
+            pool = available_clients if available_clients is not None else list(range(args.num_users))
+            return gradient_channel_aware_selection(
+                learning_signals=client_local_losses,
+                channel_gains=channel_gains,
+                energy_costs=per_round_energy,
+                num_selected=num_selected,
+                learning_weight=args.gca_learning_weight,
+                channel_weight=args.gca_channel_weight,
+                energy_weight=args.gca_energy_weight,
                 available_clients=pool,
             )
         if args.use_energy and available_clients and len(available_clients) >= num_selected:
@@ -1218,7 +1242,7 @@ if __name__ == '__main__':
             if args.use_shapley:
                 client_participation_counts[idx] += 1
                 client_last_round[idx] = epoch
-            elif args.selection_method == 'oort' and client_participation_counts is not None:
+            elif args.selection_method in ('oort', 'gca') and client_participation_counts is not None:
                 client_participation_counts[idx] += 1
 
             if args.use_fedprox:

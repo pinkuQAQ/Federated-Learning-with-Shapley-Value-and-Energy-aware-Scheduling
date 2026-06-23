@@ -51,7 +51,7 @@ def args_parser():
     parser.add_argument('--no_shapley', action='store_false', default=True, dest='use_shapley',
                         help='disable Shapley-based client selection (default: use Shapley)')
     parser.add_argument('--selection_method', type=str, default='hybrid',
-                        choices=['random', 'round_robin', 'greedy', 'hybrid', 'poc', 'ucb', 'oort'],
+                        choices=['random', 'round_robin', 'greedy', 'hybrid', 'poc', 'ucb', 'oort', 'gca'],
                         help='client selection method')
     parser.add_argument('--poc_candidate_size', type=int, default=None,
                         help='Power of Choice candidate pool size (d), default: num_selected * 2')
@@ -63,6 +63,12 @@ def args_parser():
                         help='Oort-style weight for system efficiency')
     parser.add_argument('--oort_exploration_weight', type=float, default=0.1,
                         help='Oort-style exploration bonus weight')
+    parser.add_argument('--gca_learning_weight', type=float, default=0.5,
+                        help='GCA-inspired weight for stale learning-importance signal')
+    parser.add_argument('--gca_channel_weight', type=float, default=0.3,
+                        help='GCA-inspired weight for channel quality')
+    parser.add_argument('--gca_energy_weight', type=float, default=0.2,
+                        help='GCA-inspired penalty weight for estimated transmission energy')
 
     # Shapley计算参数
     parser.add_argument('--shapley_epsilon', type=float, default=0.01,
