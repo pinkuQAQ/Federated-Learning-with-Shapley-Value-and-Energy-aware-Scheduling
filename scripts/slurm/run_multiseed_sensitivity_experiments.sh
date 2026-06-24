@@ -69,6 +69,7 @@ ENERGY_ARGS="--use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_th
 LYAP_ARGS="--use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0"
 SV_UPDATE_ARGS="--shapley_update_method mean --shapley_alpha 0.5"
 SV_CC_ARGS="--shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 --shapley_max_iter 20"
+GCA_ARGS="--no_shapley --selection_method gca --gca_learning_weight 0.5 --gca_channel_weight 0.3 --gca_energy_weight 0.2"
 
 echo ""
 echo "Configuration"
@@ -133,6 +134,12 @@ if [ "${RUN_ALPHA}" = "1" ]; then
                     --no_shapley --selection_method oort \
                     ${ENERGY_ARGS} ${DP_ARGS} \
                     --output_folder "${OUT_BASE}/oort"
+
+                run_cmd "GCA alpha=${ALPHA}, seed=${SEED}" "${OUT_BASE}/gca" \
+                    ${BASE_ARGS} --dirichlet_alpha ${ALPHA} --seed ${SEED} \
+                    ${GCA_ARGS} \
+                    ${ENERGY_ARGS} ${DP_ARGS} \
+                    --output_folder "${OUT_BASE}/gca"
             fi
         done
     done
