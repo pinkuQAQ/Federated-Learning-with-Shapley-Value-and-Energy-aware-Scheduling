@@ -24,7 +24,6 @@ METHODS = [
     ("hybrid_SV_Energy_Lyapunov_CDP", "Ours", "C0", "-"),
     ("random_CDP", "FedAvg", "C1", "--"),
     ("random_FedProx_CDP", "FedProx", "C2", "-."),
-    ("poc_CDP", "PoC", "C3", ":"),
     ("oort_Energy_CDP", "Oort", "C5", "-."),
     ("gca_Energy_CDP", "GCA", "C4", (0, (3, 1, 1, 1))),
 ]
@@ -172,6 +171,7 @@ def plot(path_pdf, path_png, summary):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--tag", default=None, help="Run tag under save/sensitivity_multiseed. Defaults to latest.")
+    parser.add_argument("--plot", action="store_true", help="Also write the optional sensitivity figure.")
     args = parser.parse_args()
 
     root = SAVE / "sensitivity_multiseed"
@@ -191,8 +191,9 @@ def main():
     write_csv(out / "alpha_runs.csv", rows)
     write_table(out / "alpha_table.tex", summary)
     (out / "alpha_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-    plot(ROOT / "latex" / "figures" / "sensitivity_alpha.pdf",
-         SAVE / "sensitivity_alpha.png", summary)
+    if args.plot:
+        plot(ROOT / "latex" / "figures" / "sensitivity_alpha.pdf",
+             SAVE / "sensitivity_alpha.png", summary)
 
     print(f"Run root: {run_root.relative_to(ROOT)}")
     print(f"Records: {len(rows)}")

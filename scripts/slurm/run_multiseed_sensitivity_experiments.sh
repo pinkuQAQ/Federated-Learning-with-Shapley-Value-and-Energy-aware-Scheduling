@@ -123,12 +123,6 @@ if [ "${RUN_ALPHA}" = "1" ]; then
                     ${DP_ARGS} \
                     --output_folder "${OUT_BASE}/fedprox"
 
-                run_cmd "PoC alpha=${ALPHA}, seed=${SEED}" "${OUT_BASE}/poc" \
-                    ${BASE_ARGS} --dirichlet_alpha ${ALPHA} --seed ${SEED} \
-                    --no_shapley --selection_method poc \
-                    ${DP_ARGS} \
-                    --output_folder "${OUT_BASE}/poc"
-
                 run_cmd "Oort alpha=${ALPHA}, seed=${SEED}" "${OUT_BASE}/oort" \
                     ${BASE_ARGS} --dirichlet_alpha ${ALPHA} --seed ${SEED} \
                     --no_shapley --selection_method oort \

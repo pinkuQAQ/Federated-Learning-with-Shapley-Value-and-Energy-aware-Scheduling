@@ -67,6 +67,7 @@ class LocalUpdate(object):
         # 新增：记录训练统计
         self.total_samples_trained = 0
         self.epochs_completed = 0
+        self.loss_square_mean = 0.0
 
     def train_val_test(self, dataset, idxs):
         """
@@ -95,6 +96,7 @@ class LocalUpdate(object):
         # 重置计数器
         self.total_samples_trained = 0
         self.epochs_completed = 0
+        self.loss_square_mean = 0.0
 
         # 确保模型在正确的设备上
         model.to(self.device)
@@ -102,6 +104,7 @@ class LocalUpdate(object):
         # Set mode to train model
         trainable_params = prepare_model_for_local_training(model, self.args)
         epoch_loss = []
+        loss_square_sum = 0.0
 
         # Set optimizer for the local updates
         if self.args.optimizer == 'sgd':
@@ -130,6 +133,7 @@ class LocalUpdate(object):
                 # 记录实际使用的样本数
                 batch_size = images.size(0)
                 self.total_samples_trained += batch_size
+                loss_square_sum += (loss.item() ** 2) * batch_size
 
                 if self.args.verbose and (batch_idx % 10 == 0):
                     print(
@@ -142,6 +146,9 @@ class LocalUpdate(object):
                 self.logger.add_scalar('loss', loss.item())
                 batch_loss.append(loss.item())
             epoch_loss.append(sum(batch_loss) / len(batch_loss))
+
+        if self.total_samples_trained > 0:
+            self.loss_square_mean = loss_square_sum / self.total_samples_trained
 
         # 返回模型前，确保它在CPU上（为了序列化和传递）
         model.to('cpu')
@@ -196,10 +203,12 @@ class LocalUpdateFedProx(LocalUpdate):
     def update_weights(self, model, global_round):
         self.total_samples_trained = 0
         self.epochs_completed = 0
+        self.loss_square_mean = 0.0
 
         model.to(self.device)
         trainable_params = prepare_model_for_local_training(model, self.args)
         epoch_loss = []
+        loss_square_sum = 0.0
 
         # 保存全局模型参数作为近端项参考，不参与梯度更新
         global_params = [p.clone().detach().to(self.device) for p in trainable_params]
@@ -232,7 +241,9 @@ class LocalUpdateFedProx(LocalUpdate):
                 loss.backward()
                 optimizer.step()
 
-                self.total_samples_trained += images.size(0)
+                batch_size = images.size(0)
+                self.total_samples_trained += batch_size
+                loss_square_sum += (loss.item() ** 2) * batch_size
 
                 if self.args.verbose and (batch_idx % 10 == 0):
                     print('| Global Round : {} | Local Epoch : {} | [{}/{} ({:.0f}%)]\tLoss: {:.6f}'.format(
@@ -243,6 +254,9 @@ class LocalUpdateFedProx(LocalUpdate):
                 self.logger.add_scalar('loss', loss.item())
                 batch_loss.append(loss.item())
             epoch_loss.append(sum(batch_loss) / len(batch_loss))
+
+        if self.total_samples_trained > 0:
+            self.loss_square_mean = loss_square_sum / self.total_samples_trained
 
         model.to('cpu')
         return model.state_dict(), sum(epoch_loss) / len(epoch_loss), self.total_samples_trained

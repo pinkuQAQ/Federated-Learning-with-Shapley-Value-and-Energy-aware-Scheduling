@@ -9,7 +9,7 @@ selection.py - 客户端选择策略模块
 
 import numpy as np
 import random
-from typing import List
+from typing import Dict, List
 
 
 def round_robin_selection(num_clients: int, num_selected: int,
@@ -258,52 +258,208 @@ def power_of_choice_selection(client_losses: np.ndarray,
 
     return [c for c, _ in candidate_losses[:num_selected]]
 
-def oort_selection(client_losses: np.ndarray,
-                   system_costs: np.ndarray,
-                   participation_counts: np.ndarray,
-                   num_selected: int,
-                   current_round: int,
-                   utility_weight: float = 0.8,
-                   system_weight: float = 0.2,
-                   exploration_weight: float = 0.1,
-                   available_clients: List[int] = None) -> List[int]:
-    """Lightweight Oort-style client selection."""
-    num_clients = len(client_losses)
-    if available_clients is None or len(available_clients) == 0:
-        available_clients = list(range(num_clients))
+class OortSelector:
+    """Training participant selector following Oort's Algorithm 1.
 
-    losses = np.asarray(client_losses, dtype=np.float64)
-    costs = np.asarray(system_costs, dtype=np.float64) if system_costs is not None else np.ones(num_clients)
-    counts = np.asarray(participation_counts, dtype=np.float64) if participation_counts is not None else np.zeros(num_clients)
+    The selector keeps Oort's observed statistical utility U(i), duration D(i),
+    last selected round L(i), pacer target T, epsilon exploration schedule, and
+    robust exploitation controls. Feedback is supplied after each local round.
+    """
 
-    def _minmax(x, default=1.0):
-        x = np.asarray(x, dtype=np.float64)
-        finite = np.isfinite(x)
-        if not finite.any():
-            return np.ones_like(x) * default
-        lo, hi = np.nanmin(x[finite]), np.nanmax(x[finite])
-        if hi - lo <= 1e-10:
-            return np.ones_like(x) * default
-        return (x - lo) / (hi - lo)
+    def __init__(self,
+                 num_clients: int,
+                 sample_size: int,
+                 epsilon: float = 0.9,
+                 epsilon_decay: float = 0.98,
+                 epsilon_min: float = 0.2,
+                 pacer_step: float = 0.0,
+                 pacer_window: int = 20,
+                 straggler_penalty: float = 2.0,
+                 cutoff_util: float = 0.95,
+                 clip_percentile: float = 95.0,
+                 blacklist_rounds: int = 0,
+                 seed: int = 42):
+        self.num_clients = int(num_clients)
+        self.sample_size = int(sample_size)
+        self.epsilon = float(epsilon)
+        self.epsilon_decay = float(epsilon_decay)
+        self.epsilon_min = float(epsilon_min)
+        self.pacer_step = float(pacer_step)
+        self.pacer_window = int(pacer_window)
+        self.straggler_penalty = float(straggler_penalty)
+        self.cutoff_util = float(cutoff_util)
+        self.clip_percentile = float(clip_percentile)
+        self.blacklist_rounds = int(blacklist_rounds)
+        self.rng = np.random.RandomState(seed)
 
-    utility = _minmax(losses, default=1.0)
-    efficiency = 1.0 - _minmax(costs, default=0.0)
-    t = max(int(current_round), 1)
-    exploration = np.sqrt(np.log(t + 1.0) / (counts + 1.0))
-    exploration = _minmax(exploration, default=1.0)
+        self.round = 0
+        self.target_duration = max(self.pacer_step, 1e-6)
+        self.statistical_utility = np.zeros(self.num_clients, dtype=np.float64)
+        self.durations = np.zeros(self.num_clients, dtype=np.float64)
+        self.last_selected_round = -np.ones(self.num_clients, dtype=np.int64)
+        self.participation_counts = np.zeros(self.num_clients, dtype=np.int64)
+        self.explored = np.zeros(self.num_clients, dtype=bool)
+        self.blacklist_until = np.zeros(self.num_clients, dtype=np.int64)
+        self.round_utility_history = []
+        self.selection_history = []
 
-    score = (
-        utility_weight * utility
-        + system_weight * efficiency
-        + exploration_weight * exploration
-    )
+    def select(self, available_clients: List[int] = None) -> List[int]:
+        self.round += 1
+        if available_clients is None or len(available_clients) == 0:
+            available_clients = list(range(self.num_clients))
+        candidates = np.asarray(available_clients, dtype=np.int64)
+        if candidates.size == 0:
+            return []
 
-    mask = np.zeros(num_clients, dtype=bool)
-    mask[available_clients] = True
-    score[~mask] = -np.inf
+        candidates = candidates[
+            (candidates >= 0)
+            & (candidates < self.num_clients)
+            & (self.blacklist_until[candidates] <= self.round)
+        ]
+        if candidates.size == 0:
+            candidates = np.asarray(available_clients, dtype=np.int64)
 
-    selected_count = min(num_selected, len(available_clients))
-    return np.argsort(score)[-selected_count:][::-1].tolist()
+        k = min(self.sample_size, int(candidates.size))
+        explored = [int(c) for c in candidates if self.explored[c]]
+        unexplored = [int(c) for c in candidates if not self.explored[c]]
+
+        explore_k = min(int(np.ceil(self.epsilon * k)), len(unexplored))
+        exploit_k = max(k - explore_k, 0)
+        if exploit_k > len(explored):
+            explore_k = min(k - len(explored), len(unexplored))
+            exploit_k = k - explore_k
+
+        selected = []
+        if exploit_k > 0 and explored:
+            selected.extend(self._sample_exploited(explored, exploit_k))
+
+        if explore_k > 0 and unexplored:
+            selected.extend(self._sample_unexplored_by_speed(unexplored, explore_k))
+
+        if len(selected) < k:
+            remaining = [int(c) for c in candidates if int(c) not in set(selected)]
+            if remaining:
+                selected.extend(self.rng.choice(
+                    remaining, size=min(k - len(selected), len(remaining)), replace=False
+                ).astype(int).tolist())
+
+        self.selection_history.append({
+            'round': self.round,
+            'selected': list(selected),
+            'epsilon': float(self.epsilon),
+            'target_duration': float(self.target_duration),
+        })
+        self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
+        return selected[:k]
+
+    def update_feedback(self, feedback: Dict[int, Dict[str, float]]) -> None:
+        if not feedback:
+            self.round_utility_history.append(0.0)
+            self._update_pacer()
+            return
+
+        raw_utils = []
+        for client_id, item in feedback.items():
+            loss_square_mean = max(float(item.get('loss_square_mean', item.get('loss', 0.0) ** 2)), 0.0)
+            samples = max(float(item.get('num_samples', 1.0)), 1.0)
+            duration = max(float(item.get('duration', 0.0)), 1e-6)
+            utility = samples * np.sqrt(loss_square_mean)
+            if np.isfinite(utility):
+                raw_utils.append(utility)
+
+        clip_value = np.inf
+        if raw_utils and self.clip_percentile < 100.0:
+            clip_value = float(np.percentile(raw_utils, self.clip_percentile))
+
+        achieved_utility = 0.0
+        for client_id, item in feedback.items():
+            cid = int(client_id)
+            if cid < 0 or cid >= self.num_clients:
+                continue
+            loss_square_mean = max(float(item.get('loss_square_mean', item.get('loss', 0.0) ** 2)), 0.0)
+            samples = max(float(item.get('num_samples', 1.0)), 1.0)
+            duration = max(float(item.get('duration', 0.0)), 1e-6)
+            utility = samples * np.sqrt(loss_square_mean)
+            if np.isfinite(clip_value):
+                utility = min(utility, clip_value)
+            if not np.isfinite(utility):
+                utility = 0.0
+
+            self.statistical_utility[cid] = utility
+            self.durations[cid] = duration
+            self.last_selected_round[cid] = self.round
+            self.participation_counts[cid] += 1
+            self.explored[cid] = True
+            achieved_utility += utility
+
+            if self.blacklist_rounds > 0 and self.participation_counts[cid] >= self.blacklist_rounds:
+                self.blacklist_until[cid] = self.round + self.blacklist_rounds
+                self.participation_counts[cid] = 0
+
+        self.round_utility_history.append(float(achieved_utility))
+        self._update_pacer()
+
+    def get_state(self) -> Dict[str, object]:
+        return {
+            'epsilon': float(self.epsilon),
+            'target_duration': float(self.target_duration),
+            'statistical_utility': self.statistical_utility.copy(),
+            'durations': self.durations.copy(),
+            'last_selected_round': self.last_selected_round.copy(),
+            'explored': self.explored.copy(),
+            'participation_counts': self.participation_counts.copy(),
+            'round_utility_history': list(self.round_utility_history),
+            'selection_history': list(self.selection_history),
+        }
+
+    def _client_utilities(self, clients: List[int]) -> np.ndarray:
+        clients_arr = np.asarray(clients, dtype=np.int64)
+        utility = self.statistical_utility[clients_arr].copy()
+        stale = np.maximum(self.round - self.last_selected_round[clients_arr], 1)
+        utility += 0.1 * np.sqrt(np.log(max(self.round, 2)) / stale)
+
+        durations = self.durations[clients_arr]
+        slow = durations > self.target_duration
+        if np.any(slow):
+            penalty = (self.target_duration / np.maximum(durations[slow], 1e-6)) ** self.straggler_penalty
+            utility[slow] *= penalty
+        utility[~np.isfinite(utility)] = 0.0
+        return np.maximum(utility, 0.0)
+
+    def _sample_exploited(self, clients: List[int], k: int) -> List[int]:
+        utilities = self._client_utilities(clients)
+        if utilities.size == 0:
+            return []
+
+        sorted_utils = np.sort(utilities)[::-1]
+        cutoff_index = min(max(k - 1, 0), sorted_utils.size - 1)
+        threshold = self.cutoff_util * sorted_utils[cutoff_index]
+        pool_mask = utilities >= threshold
+        pool = np.asarray(clients, dtype=np.int64)[pool_mask]
+        pool_utils = utilities[pool_mask]
+        if pool.size == 0:
+            pool = np.asarray(clients, dtype=np.int64)
+            pool_utils = utilities
+
+        probs = pool_utils / pool_utils.sum() if pool_utils.sum() > 1e-12 else None
+        return self.rng.choice(pool, size=min(k, pool.size), replace=False, p=probs).astype(int).tolist()
+
+    def _sample_unexplored_by_speed(self, clients: List[int], k: int) -> List[int]:
+        speed_proxy = 1.0 / np.maximum(self.durations[np.asarray(clients, dtype=np.int64)], 1e-6)
+        if np.allclose(speed_proxy, speed_proxy[0]):
+            probs = None
+        else:
+            probs = speed_proxy / speed_proxy.sum()
+        return self.rng.choice(clients, size=min(k, len(clients)), replace=False, p=probs).astype(int).tolist()
+
+    def _update_pacer(self) -> None:
+        w = self.pacer_window
+        if self.pacer_step <= 0.0 or w <= 0 or len(self.round_utility_history) < 2 * w:
+            return
+        previous = np.sum(self.round_utility_history[-2 * w:-w])
+        recent = np.sum(self.round_utility_history[-w:])
+        if previous > recent:
+            self.target_duration += self.pacer_step
 
 
 def gradient_channel_aware_selection(learning_signals: np.ndarray,

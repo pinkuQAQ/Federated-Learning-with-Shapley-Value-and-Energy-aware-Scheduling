@@ -12,13 +12,11 @@ import matplotlib.pyplot as plt
 ROOT = Path(__file__).parent.parent
 SAVE = ROOT / 'save'
 FIG_OUT = ROOT / 'latex' / 'figures' / 'baseline_convergence.pdf'
-PNG_OUT = SAVE / 'baseline_convergence.png'
 
 METHODS = [
     ('hybrid_SV_Energy_Lyapunov_CDP', 'Ours',     'C0', '-'),
     ('random_CDP',                     'FedAvg',   'C1', '--'),
     ('random_FedProx_CDP',             'FedProx',  'C2', '-.'),
-    ('poc_CDP',                        'PoC',      'C3', ':'),
     ('oort_Energy_CDP',                'Oort',     'C5', '-.'),
     ('gca_Energy_CDP',                 'GCA',      'C4', (0, (3, 1, 1, 1))),
 ]
@@ -50,6 +48,12 @@ def main():
     parser.add_argument('--tag', default=None, help='Run tag under save/main/. Defaults to latest.')
     parser.add_argument('--root', default=None,
                         help='Optional main-result root, e.g. save/sv_supp/<tag>/main.')
+    parser.add_argument('--replace-root', default=None,
+                        help='Optional root whose runs replace matching method tags from the base root.')
+    parser.add_argument('--replace-tags', default='',
+                        help='Comma-separated method tags to replace from --replace-root.')
+    parser.add_argument('--png', action='store_true',
+                        help='Also write a PNG copy under save/.')
     args = parser.parse_args()
 
     data = defaultdict(list)
@@ -68,23 +72,47 @@ def main():
             run_dir = run_dirs[-1]
     if not run_dir.exists():
         raise FileNotFoundError(f'Run directory not found: {run_dir}')
-    folders = sorted([p for p in run_dir.iterdir() if p.is_dir()])
+    if args.root:
+        pkls = sorted(run_dir.rglob('*.pkl'))
+    else:
+        folders = sorted([p for p in run_dir.iterdir() if p.is_dir()])
+        pkls = [pkl for folder in folders for pkl in folder.glob('*.pkl')]
     print(f'using {run_dir}')
-    for folder in folders:
-        for pkl in folder.glob('*.pkl'):
+    for pkl in pkls:
+        t = find_tag(pkl.name)
+        if t is None:
+            continue
+        with open(pkl, 'rb') as f:
+            d = pickle.load(f)
+        data[t].append(normalize(d['test_accuracy']))
+
+    replace_tags = {tag.strip() for tag in args.replace_tags.split(',') if tag.strip()}
+    if args.replace_root:
+        if not replace_tags:
+            raise ValueError('--replace-tags is required when --replace-root is used')
+        replace_dir = Path(args.replace_root)
+        if not replace_dir.exists():
+            raise FileNotFoundError(f'Replacement directory not found: {replace_dir}')
+        for tag in replace_tags:
+            data[tag] = []
+        for pkl in sorted(replace_dir.rglob('*.pkl')):
             t = find_tag(pkl.name)
-            if t is None:
+            if t not in replace_tags:
                 continue
             with open(pkl, 'rb') as f:
                 d = pickle.load(f)
             data[t].append(normalize(d['test_accuracy']))
+        print(f'replaced {sorted(replace_tags)} from {replace_dir}')
 
     fig, ax = plt.subplots(figsize=(7.0, 4.4))
+    lengths = []
     for tag, label, color, ls in METHODS:
+        print(f'{label}: {len(data[tag])} runs')
         if tag not in data or not data[tag]:
             continue
         # Pad to common length
         L = min(len(a) for a in data[tag])
+        lengths.append(L)
         runs = np.stack([a[:L] for a in data[tag]], axis=0)
         runs_smooth = np.stack([smooth_ema(r, alpha=0.1) for r in runs], axis=0)
         mean = runs_smooth.mean(axis=0)
@@ -93,17 +121,22 @@ def main():
 
     ax.set_xlabel('Communication round')
     ax.set_ylabel('Test accuracy (%)')
-    ax.set_title(r'CIFAR-10, Dirichlet $\alpha=0.1$, channel-only privacy, '
+    ax.set_title(r'CIFAR-10, Dirichlet $\alpha=0.1$, channel-noise diagnostic, '
                  'mean over 3 seeds')
     ax.grid(alpha=0.3, linestyle=':')
     ax.legend(loc='lower right', fontsize=9, ncol=2, framealpha=0.85)
-    ax.set_xlim(1, max(L for tag in data if data[tag] for L in [min(len(a) for a in data[tag])]))
+    if not lengths:
+        raise ValueError(f'No plottable method runs found under {run_dir}')
+    ax.set_xlim(1, max(lengths))
     ax.set_ylim(8, 50)
     fig.tight_layout()
     FIG_OUT.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(FIG_OUT, bbox_inches='tight')
-    fig.savefig(PNG_OUT, dpi=140, bbox_inches='tight')
-    print(f'wrote {FIG_OUT}\nwrote {PNG_OUT}')
+    print(f'wrote {FIG_OUT}')
+    if args.png:
+        png_out = SAVE / 'baseline_convergence.png'
+        fig.savefig(png_out, dpi=140, bbox_inches='tight')
+        print(f'wrote {png_out}')
 
 
 if __name__ == '__main__':

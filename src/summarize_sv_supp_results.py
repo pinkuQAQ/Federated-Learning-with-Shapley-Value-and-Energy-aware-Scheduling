@@ -23,7 +23,6 @@ MAIN_ORDER = [
     ("hybrid_SV_Energy_Lyapunov_CDP", "Ours"),
     ("random_CDP", "FedAvg"),
     ("random_FedProx_CDP", "FedProx"),
-    ("poc_CDP", "PoC"),
     ("oort_Energy_CDP", "Oort"),
     ("gca_Energy_CDP", "GCA"),
 ]
@@ -31,7 +30,7 @@ MAIN_ORDER = [
 ABLATION_ORDER = [
     ("hybrid_SV_Energy_Lyapunov_CDP", "Full"),
     ("random_Energy_Lyapunov_CDP", "w/o SV"),
-    ("hybrid_SV_Energy_CDP", "w/o Lyapunov"),
+    ("hybrid_SV_Energy_NoQueue_CDP", "w/o Queue"),
     ("hybrid_SV_CDP", "w/o Energy"),
 ]
 

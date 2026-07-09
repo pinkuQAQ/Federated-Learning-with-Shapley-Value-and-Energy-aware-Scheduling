@@ -62,7 +62,7 @@ from shapley import MCShapley
 from selection import (hybrid_selection, random_selection, round_robin_selection,
                        greedy_shapley_selection, energy_aware_selection,
                        hybrid_energy_aware_selection, power_of_choice_selection,
-                       ucb_selection, oort_selection,
+                       ucb_selection, OortSelector,
                        gradient_channel_aware_selection)
 from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
@@ -465,12 +465,37 @@ def _compute_observed_dp_epsilon(dp_round_history, sample_rate, delta):
     return _compute_dp_epsilon_schedule(sigmas, sample_rate, delta)
 
 
+def _build_oort_selector(args, num_selected, user_groups):
+    train_sizes = np.asarray([
+        max(int(len(user_groups[i]) * TRAIN_SPLIT_RATIO), 1)
+        for i in range(args.num_users)
+    ], dtype=np.float64)
+    if getattr(args, 'oort_pacer_step', 0.0) > 0.0:
+        pacer_step = float(args.oort_pacer_step)
+    else:
+        pacer_step = max(float(np.percentile(train_sizes, 25)) / max(float(np.median(train_sizes)), 1.0), 1e-3)
+    return OortSelector(
+        num_clients=args.num_users,
+        sample_size=num_selected,
+        epsilon=args.oort_epsilon,
+        epsilon_decay=args.oort_epsilon_decay,
+        epsilon_min=args.oort_epsilon_min,
+        pacer_step=pacer_step,
+        pacer_window=args.oort_pacer_window,
+        straggler_penalty=args.oort_straggler_penalty,
+        cutoff_util=args.oort_cutoff_util,
+        clip_percentile=args.oort_clip_percentile,
+        blacklist_rounds=args.oort_blacklist_rounds,
+        seed=args.seed,
+    )
+
+
 def select_clients(args, epoch, num_selected, initial_rounds,
                    shapley_values, client_participation_counts,
                    energy_scores, available_clients,
                    energy_manager, lyapunov_optimizer,
                    client_local_losses, user_groups=None,
-                   ucb_rewards=None, ucb_counts=None):
+                   ucb_rewards=None, ucb_counts=None, oort_selector=None):
     """统一的客户端选择逻辑"""
     if shapley_values is not None:
         np.nan_to_num(shapley_values, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
@@ -501,27 +526,10 @@ def select_clients(args, epoch, num_selected, initial_rounds,
                 available_clients=available_clients,
             )
         if args.selection_method == 'oort':
-            client_data_sizes = _get_client_data_sizes(user_groups, args.num_users) if user_groups is not None else None
-            if energy_manager is not None and energy_manager.channel_gains is not None:
-                per_round_energy = energy_manager.compute_energy_consumption(
-                    energy_manager.channel_gains,
-                    selected_clients=None,
-                    client_data_sizes=client_data_sizes,
-                )
-            else:
-                per_round_energy = np.ones(args.num_users, dtype=np.float64)
             pool = available_clients if available_clients is not None else list(range(args.num_users))
-            return oort_selection(
-                client_losses=client_local_losses,
-                system_costs=per_round_energy,
-                participation_counts=client_participation_counts,
-                num_selected=num_selected,
-                current_round=epoch + 1,
-                utility_weight=args.oort_utility_weight,
-                system_weight=args.oort_system_weight,
-                exploration_weight=args.oort_exploration_weight,
-                available_clients=pool,
-            )
+            if oort_selector is None:
+                return np.random.choice(pool, min(num_selected, len(pool)), replace=False).tolist()
+            return oort_selector.select(available_clients=pool)
         if args.selection_method == 'gca':
             client_data_sizes = _get_client_data_sizes(user_groups, args.num_users) if user_groups is not None else None
             if energy_manager is not None and energy_manager.channel_gains is not None:
@@ -588,6 +596,7 @@ def _select_lyapunov(args, epoch, num_selected, shapley_values,
         sv_weight=args.sv_weight,
         battery_weight=args.battery_weight,
         channel_weight=args.channel_weight,
+        disable_queue_penalty=getattr(args, 'disable_queue_penalty', False),
     )
 
     # 在可用客户端（含Poisson子采样）内选择
@@ -791,7 +800,8 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                  test_accuracies, test_acc, shapley_values, client_participation_counts,
                  client_last_round, energy_manager, lyapunov_optimizer,
                  start_time, sv_sample_size=0, ucb_rewards=None, ucb_counts=None,
-                 dp_round_history=None, shapley_time_history=None):
+                 dp_round_history=None, shapley_time_history=None,
+                 oort_selector=None):
     """保存实验结果"""
     os.makedirs(exp_folder, exist_ok=True)
     privacy_mode = getattr(args, 'privacy_mode', 'none')
@@ -806,7 +816,10 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         if args.use_energy:
             method_suffix += "_Energy"
     if args.use_lyapunov:
-        method_suffix += "_Lyapunov"
+        if getattr(args, 'disable_queue_penalty', False):
+            method_suffix += "_NoQueue"
+        else:
+            method_suffix += "_Lyapunov"
     if args.use_fedprox:
         method_suffix += "_FedProx"
     if privacy_mode == 'central':
@@ -854,6 +867,12 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         save_data.update({
             'ucb_rewards': ucb_rewards,
             'ucb_counts': ucb_counts,
+        })
+
+    if args.selection_method == 'oort' and oort_selector is not None:
+        save_data.update({
+            'oort_state': oort_selector.get_state(),
+            'client_participation_counts': oort_selector.participation_counts.copy(),
         })
 
     if privacy_mode == 'central':
@@ -925,8 +944,8 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             f.write(f"- Dirichlet alpha: {args.dirichlet_alpha}\n\n")
             f.write(f"## 客户端选择\n\n")
             f.write(f"- 使用Shapley: {args.use_shapley}\n")
+            f.write(f"- 选择方法: {args.selection_method}\n")
             if args.use_shapley:
-                f.write(f"- 选择方法: {args.selection_method}\n")
                 f.write(f"- Shapley估计器: {args.shapley_estimator}\n")
                 if args.shapley_estimator == 'complementary':
                     f.write(f"- 互补贡献分配: {args.shapley_allocation}\n")
@@ -937,6 +956,19 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 f.write(f"- 初始轮数: {args.initial_rounds}\n")
                 f.write(f"- SV验证集样本数: {sv_sample_size}\n")
                 f.write(f"- SV测试集采样种子: 42\n")
+            if args.selection_method == 'oort':
+                f.write(f"- Oort epsilon: {args.oort_epsilon}\n")
+                f.write(f"- Oort epsilon decay/min: {args.oort_epsilon_decay}/{args.oort_epsilon_min}\n")
+                f.write(f"- Oort pacer window: {args.oort_pacer_window}\n")
+                f.write(f"- Oort pacer step: {args.oort_pacer_step}\n")
+                f.write(f"- Oort straggler penalty alpha: {args.oort_straggler_penalty}\n")
+                f.write(f"- Oort cutoff utility ratio: {args.oort_cutoff_util}\n")
+                f.write(f"- Oort clip percentile: {args.oort_clip_percentile}\n")
+                f.write(f"- Oort blacklist rounds: {args.oort_blacklist_rounds}\n")
+            if args.use_fedprox:
+                f.write(f"- FedProx proximal term: enabled\n")
+                f.write(f"- FedProx mu: {args.fedprox_mu}\n")
+                f.write(f"- FedProx baseline selection: {'random' if args.selection_method == 'random' else 'combined with ' + args.selection_method}\n")
             f.write(f"\n## 能量感知\n\n")
             f.write(f"- 使用能量感知: {args.use_energy}\n")
             if args.use_energy:
@@ -1077,6 +1109,18 @@ if __name__ == '__main__':
         round_client_models = None
         val_data_loader = None
 
+    if args.selection_method == 'oort' and not args.use_shapley:
+        oort_selector = _build_oort_selector(args, num_selected, user_groups)
+        client_participation_counts = oort_selector.participation_counts
+        print("\n" + "=" * 60)
+        print("启用 Oort 训练端客户端选择 (Algorithm 1)")
+        print(f"epsilon: {args.oort_epsilon} -> min {args.oort_epsilon_min}, decay={args.oort_epsilon_decay}")
+        print(f"pacer: W={args.oort_pacer_window}, step={oort_selector.pacer_step:.6f}, alpha={args.oort_straggler_penalty}")
+        print(f"utility clip percentile: {args.oort_clip_percentile}")
+        print("=" * 60 + "\n")
+    else:
+        oort_selector = None
+
     # ============= 能量管理器初始化 =============
     if args.use_energy:
         print("\n" + "=" * 60)
@@ -1134,6 +1178,8 @@ if __name__ == '__main__':
     if args.use_fedprox:
         print("\n" + "=" * 60)
         print(f"启用 FedProx 近端项 (μ={args.fedprox_mu})")
+        if args.selection_method != 'random':
+            print(f"[提示] 当前 FedProx 与 {args.selection_method} 选择器组合使用；纯 FedProx baseline 建议使用 --selection_method random")
         print("=" * 60 + "\n")
 
     # ============= Privacy module 初始化 =============
@@ -1219,7 +1265,8 @@ if __name__ == '__main__':
             energy_scores, available_clients,
             energy_manager, lyapunov_optimizer,
             client_local_losses, user_groups=user_groups,
-            ucb_rewards=ucb_rewards, ucb_counts=ucb_counts
+            ucb_rewards=ucb_rewards, ucb_counts=ucb_counts,
+            oort_selector=oort_selector,
         )
 
         if args.use_shapley and args.verbose and epoch % print_every == 0:
@@ -1238,11 +1285,12 @@ if __name__ == '__main__':
 
         # ============= 本地训练 =============
         raw_client_records = []
+        oort_feedback = {}
         for idx in idxs_users:
             if args.use_shapley:
                 client_participation_counts[idx] += 1
                 client_last_round[idx] = epoch
-            elif args.selection_method in ('oort', 'gca') and client_participation_counts is not None:
+            elif args.selection_method == 'gca' and client_participation_counts is not None:
                 client_participation_counts[idx] += 1
 
             if args.use_fedprox:
@@ -1252,8 +1300,18 @@ if __name__ == '__main__':
             else:
                 local_model = LocalUpdate(args=args, dataset=train_dataset,
                                           idxs=user_groups[idx], logger=logger, device=device)
+            local_start_time = time.time()
             w, loss, actual_samples = local_model.update_weights(
                 model=copy.deepcopy(global_model), global_round=epoch)
+            local_duration = time.time() - local_start_time
+
+            if args.selection_method == 'oort' and oort_selector is not None:
+                oort_feedback[int(idx)] = {
+                    'loss': float(loss),
+                    'loss_square_mean': float(getattr(local_model, 'loss_square_mean', float(loss) ** 2)),
+                    'num_samples': float(actual_samples),
+                    'duration': float(local_duration),
+                }
 
             if getattr(args, 'privacy_mode', 'none') == 'central':
                 raw_client_records.append((idx, w, loss))
@@ -1321,6 +1379,10 @@ if __name__ == '__main__':
                     'raw_update_norm': float(update_norm),
                     'layer_clip_norm_mean': float(np.mean(list(adaptive_layer_clip_norms.values()))) if layer_mode and adaptive_layer_clip_norms else 0.0,
                 })
+
+        if args.selection_method == 'oort' and oort_selector is not None:
+            oort_selector.update_feedback(oort_feedback)
+            client_participation_counts = oort_selector.participation_counts
 
         # 保存本轮数据（用于下一轮计算Shapley值）
         if args.use_shapley:
@@ -1527,6 +1589,7 @@ if __name__ == '__main__':
         ucb_rewards=ucb_rewards, ucb_counts=ucb_counts,
         dp_round_history=dp_round_history,
         shapley_time_history=shapley_time_history if args.use_shapley else None,
+        oort_selector=oort_selector,
     )
 
     print('\n Total Run Time: {0:0.4f} seconds'.format(time.time() - start_time))

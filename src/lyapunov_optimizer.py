@@ -112,7 +112,8 @@ class LyapunovTripleScheduler:
                        channel_gains: np.ndarray = None,
                        sv_weight: float = 0.7,
                        battery_weight: float = 0.15,
-                       channel_weight: float = 0.15) -> np.ndarray:
+                       channel_weight: float = 0.15,
+                       disable_queue_penalty: bool = False) -> np.ndarray:
         """
         Compute the deployed Lyapunov scheduling score.
 
@@ -121,6 +122,9 @@ class LyapunovTripleScheduler:
 
         The virtual queue keeps the long-term energy penalty:
             Score_n = V * U_n - Q_n * E_n
+
+        For the w/o Queue ablation, disable_queue_penalty removes only the
+        Q_n * E_n term and leaves the utility definition unchanged.
         """
         sv_norm = self._minmax(shapley_values, default=1.0)
 
@@ -151,7 +155,10 @@ class LyapunovTripleScheduler:
             + battery_weight * battery_norm
             + channel_weight * channel_norm
         )
-        scores = self.V * utility - self.energy_queue * energy_norm
+        if disable_queue_penalty:
+            scores = self.V * utility
+        else:
+            scores = self.V * utility - self.energy_queue * energy_norm
 
         return scores
 

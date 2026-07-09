@@ -118,12 +118,6 @@ if [ "${RUN_MAIN}" = "1" ]; then
             ${DP_ARGS} \
             --output_folder ${OUT}
 
-        run_cmd "PoC: Power of Choice, seed=${SEED}" "${OUT}" \
-            ${BASE_ARGS} --seed ${SEED} \
-            --no_shapley --selection_method poc \
-            ${DP_ARGS} \
-            --output_folder ${OUT}
-
         run_cmd "Oort: utility-aware selection, seed=${SEED}" "${OUT}" \
             ${BASE_ARGS} --seed ${SEED} \
             --no_shapley --selection_method oort \

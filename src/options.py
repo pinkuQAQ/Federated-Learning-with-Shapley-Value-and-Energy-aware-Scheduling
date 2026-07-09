@@ -57,12 +57,24 @@ def args_parser():
                         help='Power of Choice candidate pool size (d), default: num_selected * 2')
     parser.add_argument('--poc_decay_rate', type=float, default=0.9,
                         help='Power of Choice loss decay rate (default: 0.9)')
-    parser.add_argument('--oort_utility_weight', type=float, default=0.8,
-                        help='Oort-style weight for statistical utility')
-    parser.add_argument('--oort_system_weight', type=float, default=0.2,
-                        help='Oort-style weight for system efficiency')
-    parser.add_argument('--oort_exploration_weight', type=float, default=0.1,
-                        help='Oort-style exploration bonus weight')
+    parser.add_argument('--oort_epsilon', type=float, default=0.9,
+                        help='Oort initial exploration fraction epsilon')
+    parser.add_argument('--oort_epsilon_decay', type=float, default=0.98,
+                        help='Oort per-round epsilon decay')
+    parser.add_argument('--oort_epsilon_min', type=float, default=0.2,
+                        help='Oort minimum exploration fraction')
+    parser.add_argument('--oort_pacer_window', type=int, default=20,
+                        help='Oort pacer window W')
+    parser.add_argument('--oort_pacer_step', type=float, default=0.0,
+                        help='Oort pacer duration step; 0 sets it from observed client durations')
+    parser.add_argument('--oort_straggler_penalty', type=float, default=2.0,
+                        help='Oort straggler penalty alpha')
+    parser.add_argument('--oort_cutoff_util', type=float, default=0.95,
+                        help='Oort utility cutoff ratio for exploitation pool')
+    parser.add_argument('--oort_clip_percentile', type=float, default=95.0,
+                        help='Oort utility clipping percentile for robust exploitation')
+    parser.add_argument('--oort_blacklist_rounds', type=int, default=0,
+                        help='Oort blacklist cooldown after repeated exploitation; 0 disables')
     parser.add_argument('--gca_learning_weight', type=float, default=0.5,
                         help='GCA-inspired weight for stale learning-importance signal')
     parser.add_argument('--gca_channel_weight', type=float, default=0.3,
@@ -132,6 +144,8 @@ def args_parser():
                         help='learning rate for weight updates in Lyapunov optimization')
     parser.add_argument('--energy_budget', type=float, default=2.0,
                         help='average energy consumption budget per client per round for Lyapunov optimization')
+    parser.add_argument('--disable_queue_penalty', action='store_true', default=False,
+                        help='disable the virtual-queue penalty while keeping Lyapunov utility scoring')
     # ================================================
 
     # ============= UCB 客户端选择参数 =============
