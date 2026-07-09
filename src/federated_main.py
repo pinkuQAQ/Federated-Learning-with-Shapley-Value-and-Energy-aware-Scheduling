@@ -142,6 +142,51 @@ def _get_client_data_sizes(user_groups, num_users):
     return sizes
 
 
+def _get_trainable_clients(user_groups, num_users):
+    """Return clients that own at least one local sample."""
+    if user_groups is None:
+        return list(range(num_users))
+    return [i for i in range(num_users) if len(user_groups[i]) > 0]
+
+
+def _filter_available_clients(available_clients, trainable_clients):
+    """Keep only trainable clients in an availability list."""
+    trainable_set = set(trainable_clients)
+    if available_clients is None:
+        return None
+    return [int(c) for c in available_clients if int(c) in trainable_set]
+
+
+def _ensure_trainable_selection(selected_clients, trainable_clients, num_selected,
+                                participation_counts=None):
+    """Drop empty-client selections and refill from trainable clients."""
+    trainable_set = set(trainable_clients)
+    selected = []
+    seen = set()
+    for client_id in selected_clients:
+        client_id = int(client_id)
+        if client_id in trainable_set and client_id not in seen:
+            selected.append(client_id)
+            seen.add(client_id)
+        if len(selected) >= num_selected:
+            return selected
+
+    remaining = [c for c in trainable_clients if c not in seen]
+    if participation_counts is not None:
+        remaining = sorted(remaining, key=lambda c: (participation_counts[c], c))
+    else:
+        remaining = list(remaining)
+        np.random.shuffle(remaining)
+
+    selected.extend(remaining[:max(0, num_selected - len(selected))])
+    if len(selected) < num_selected:
+        raise RuntimeError(
+            f"Only {len(selected)} trainable clients are available, "
+            f"but num_selected={num_selected}."
+        )
+    return selected
+
+
 def _client_update_norm(global_state, local_state, args):
     """Return the L2 norm of one client's model update."""
     total_sq_norm = 0.0
@@ -1259,6 +1304,14 @@ if __name__ == '__main__':
             energy_scores = None
             available_clients = None
 
+        trainable_clients = _get_trainable_clients(user_groups, args.num_users)
+        if len(trainable_clients) < num_selected:
+            raise RuntimeError(
+                f"Only {len(trainable_clients)} clients have local samples, "
+                f"but num_selected={num_selected}."
+            )
+        available_clients = _filter_available_clients(available_clients, trainable_clients)
+
         idxs_users = select_clients(
             args, epoch, num_selected, initial_rounds,
             shapley_values, client_participation_counts,
@@ -1267,6 +1320,10 @@ if __name__ == '__main__':
             client_local_losses, user_groups=user_groups,
             ucb_rewards=ucb_rewards, ucb_counts=ucb_counts,
             oort_selector=oort_selector,
+        )
+        idxs_users = _ensure_trainable_selection(
+            idxs_users, trainable_clients, num_selected,
+            client_participation_counts if client_participation_counts is not None else None
         )
 
         if args.use_shapley and args.verbose and epoch % print_every == 0:

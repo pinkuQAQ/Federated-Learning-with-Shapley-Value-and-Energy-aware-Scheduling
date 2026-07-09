@@ -79,10 +79,16 @@ class LocalUpdate(object):
         idxs = list(idxs)
         np.random.shuffle(idxs)
 
-        # split indexes for train, validation, and test (80, 10, 10)
-        idxs_train = idxs[:int(0.8 * len(idxs))]
-        idxs_val = idxs[int(0.8 * len(idxs)):int(0.9 * len(idxs))]
-        idxs_test = idxs[int(0.9 * len(idxs)):]
+        if len(idxs) == 0:
+            raise ValueError("LocalUpdate received a client with no samples.")
+
+        # split indexes for train, validation, and test (80, 10, 10).
+        # Very small Dirichlet shards must still keep at least one train sample.
+        train_end = max(1, int(0.8 * len(idxs)))
+        val_end = max(train_end, int(0.9 * len(idxs)))
+        idxs_train = idxs[:train_end]
+        idxs_val = idxs[train_end:val_end]
+        idxs_test = idxs[val_end:]
 
         trainloader = DataLoader(DatasetSplit(dataset, idxs_train),
                                  batch_size=self.args.local_bs, shuffle=True)
