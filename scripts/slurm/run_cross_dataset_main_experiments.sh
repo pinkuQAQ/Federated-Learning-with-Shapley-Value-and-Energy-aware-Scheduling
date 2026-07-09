@@ -29,7 +29,11 @@ else
     echo "ERROR: conda.sh not found. Please check your Conda installation path."
     exit 1
 fi
-conda activate flsv
+if [ -d "/data/home/zhaozhanshan/ENTER/envs/flsv" ]; then
+    conda activate /data/home/zhaozhanshan/ENTER/envs/flsv
+else
+    conda activate flsv
+fi
 export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
 
 PROJECT_ROOT=/data/home/zhaozhanshan/FLSV
