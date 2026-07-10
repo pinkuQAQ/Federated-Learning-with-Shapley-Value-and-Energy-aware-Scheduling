@@ -60,13 +60,14 @@ RUN_ALPHA_BASELINES=${RUN_ALPHA_BASELINES:-1}
 
 DP_CLIP_NORM=${DP_CLIP_NORM:-1.0}
 CHANNEL_SIGMA=${CHANNEL_SIGMA:-0.1}
+SELECTION_BETA=${SELECTION_BETA:-1.0}
 SCHED_WEIGHTS="--sv_weight 0.7 --battery_weight 0.15 --channel_weight 0.15"
 COMMON_DP_ARGS="--dp_advanced --dp_noise_schedule constant --dp_adaptive_clip --dp_clip_scope layer --dp_clip_percentile 80 --dp_clip_ema 0.8 --dp_clip_growth 1.2 --dp_min_clip_norm 0.05 --dp_max_clip_norm 1.0 --dp_channel_assisted --dp_channel_mode channel_only --dp_channel_gain_cap 2.0"
 DP_ARGS="--privacy_mode central --dp_clip_norm ${DP_CLIP_NORM} ${COMMON_DP_ARGS} --dp_noise_multiplier 0.0 --dp_channel_noise_multiplier ${CHANNEL_SIGMA}"
 
 BASE_ARGS="--dataset ${DATASET} --model ${MODEL} --epochs ${EPOCHS} --num_users ${NUM_USERS} --num_selected ${NUM_SELECTED} --local_ep ${LOCAL_EP} --local_bs ${LOCAL_BS} --lr ${LR} --test_size ${TEST_SIZE} --gpu ${GPU_ID}"
 ENERGY_ARGS="--use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0"
-LYAP_ARGS="--use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0"
+LYAP_ARGS="--use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0 --selection_beta ${SELECTION_BETA}"
 SV_UPDATE_ARGS="--shapley_update_method mean --shapley_alpha 0.5"
 SV_CC_ARGS="--shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 --shapley_max_iter 20"
 GCA_ARGS="--no_shapley --selection_method gca --gca_learning_weight 0.5 --gca_channel_weight 0.3 --gca_energy_weight 0.2"

@@ -61,6 +61,7 @@ TEST_SIZE=${TEST_SIZE:-10000}
 GPU_ID=${GPU_ID:-0}
 SEEDS=(${SEEDS:-42 123 2024})
 CHANNEL_SIGMAS=(${CHANNEL_SIGMAS:-0.0 0.1 0.25 0.5})
+SELECTION_BETA=${SELECTION_BETA:-1.0}
 RUN_TAG="${RUN_TAG:-$(date +%Y%m%d_%H%M%S)}"
 
 DP_CLIP_NORM=${DP_CLIP_NORM:-1.0}
@@ -69,7 +70,7 @@ COMMON_DP_ARGS="--dp_advanced --dp_noise_schedule constant --dp_adaptive_clip --
 
 BASE_ARGS="--dataset ${DATASET} --model ${MODEL} --epochs ${EPOCHS} --num_users ${NUM_USERS} --num_selected ${NUM_SELECTED} --local_ep ${LOCAL_EP} --local_bs ${LOCAL_BS} --lr ${LR} --dirichlet_alpha ${DIRICHLET_ALPHA} --test_size ${TEST_SIZE} --gpu ${GPU_ID}"
 ENERGY_ARGS="--use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0"
-LYAP_ARGS="--use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0"
+LYAP_ARGS="--use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0 --selection_beta ${SELECTION_BETA}"
 SV_UPDATE_ARGS="--shapley_update_method mean --shapley_alpha 0.5"
 SV_CC_ARGS="--shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 --shapley_max_iter 20"
 

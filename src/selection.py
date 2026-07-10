@@ -80,6 +80,55 @@ def random_selection(num_clients: int, num_selected: int) -> List[int]:
                             replace=False).tolist()
 
 
+def softmax_score_selection(scores: np.ndarray,
+                            num_selected: int,
+                            temperature: float = 1.0,
+                            available_clients: List[int] = None,
+                            rng=None) -> List[int]:
+    """Sample clients without replacement from a score-induced softmax."""
+    scores = np.asarray(scores, dtype=np.float64)
+    if scores.ndim != 1:
+        raise ValueError("scores must be a one-dimensional array")
+    if not np.isfinite(temperature) or temperature <= 0:
+        raise ValueError("temperature must be a positive finite value")
+
+    if available_clients is None:
+        remaining = np.arange(scores.size, dtype=np.int64)
+    else:
+        remaining = np.asarray(list(dict.fromkeys(available_clients)), dtype=np.int64)
+        if np.any(remaining < 0) or np.any(remaining >= scores.size):
+            raise ValueError("available_clients contains an invalid client index")
+
+    target = min(max(int(num_selected), 0), remaining.size)
+    if target == 0:
+        return []
+
+    rng = np.random if rng is None else rng
+    selected = []
+    for _ in range(target):
+        candidate_scores = scores[remaining]
+        finite_mask = np.isfinite(candidate_scores)
+
+        if np.any(finite_mask):
+            max_score = np.max(candidate_scores[finite_mask])
+            shifted = np.clip(
+                (candidate_scores[finite_mask] - max_score) / temperature,
+                -745.0,
+                0.0,
+            )
+            weights = np.zeros(remaining.size, dtype=np.float64)
+            weights[finite_mask] = np.exp(shifted)
+            probabilities = weights / weights.sum()
+        else:
+            probabilities = np.full(remaining.size, 1.0 / remaining.size)
+
+        selected_position = int(rng.choice(remaining.size, p=probabilities))
+        selected.append(int(remaining[selected_position]))
+        remaining = np.delete(remaining, selected_position)
+
+    return selected
+
+
 def energy_aware_selection(shapley_values: np.ndarray,
                            energy_scores: np.ndarray,
                            num_selected: int,
