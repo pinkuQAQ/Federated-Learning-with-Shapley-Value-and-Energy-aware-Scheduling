@@ -79,6 +79,7 @@ RUN_SHAPLEY_BUDGET=${RUN_SHAPLEY_BUDGET:-1}
 RUN_CHANNEL=${RUN_CHANNEL:-1}
 RUN_CROSS=${RUN_CROSS:-1}
 RUN_BASELINES=${RUN_BASELINES:-0}
+RUN_SUMMARY=${RUN_SUMMARY:-1}
 
 DP_CLIP_NORM=${DP_CLIP_NORM:-1.0}
 CHANNEL_SIGMA=${CHANNEL_SIGMA:-0.1}
@@ -320,6 +321,7 @@ echo "  SEEDS=${SEEDS[*]}"
 echo "  N=${NUM_USERS}, K=${NUM_SELECTED}, T=${EPOCHS}, alpha=${DIRICHLET_ALPHA}"
 echo "  beta=${SELECTION_BETA}, energy_budget=${ENERGY_BUDGET}, channel_sigma=${CHANNEL_SIGMA}"
 echo "  RUN_BASELINES=${RUN_BASELINES} (0 reuses legacy sv_supp baselines)"
+echo "  RUN_SUMMARY=${RUN_SUMMARY}"
 echo "  Output root: ${PROJECT_ROOT}/save/paper_alignment/${RUN_TAG}"
 echo "========================================"
 
@@ -338,8 +340,10 @@ case "${TASK_GROUP}" in
         ;;
 esac
 
-cd "${PROJECT_ROOT}"
-python src/summarize_alignment_sweeps.py --tag "${RUN_TAG}"
+if [ "${RUN_SUMMARY}" = "1" ]; then
+    cd "${PROJECT_ROOT}"
+    python src/summarize_alignment_sweeps.py --tag "${RUN_TAG}"
+fi
 
 echo ""
 echo "========================================"
