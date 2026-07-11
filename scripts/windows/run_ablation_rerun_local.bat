@@ -48,14 +48,13 @@ if not defined RUN_TAG (
 
 if not defined DP_CLIP_NORM set "DP_CLIP_NORM=1.0"
 if not defined CHANNEL_SIGMA set "CHANNEL_SIGMA=0.1"
-if not defined SELECTION_BETA set "SELECTION_BETA=1.0"
 
 set "SCHED_WEIGHTS=--sv_weight 0.7 --battery_weight 0.15 --channel_weight 0.15"
 set "COMMON_DP_ARGS=--dp_advanced --dp_noise_schedule constant --dp_adaptive_clip --dp_clip_scope layer --dp_clip_percentile 80 --dp_clip_ema 0.8 --dp_clip_growth 1.2 --dp_min_clip_norm 0.05 --dp_max_clip_norm 1.0 --dp_channel_assisted --dp_channel_mode channel_only --dp_channel_gain_cap 2.0"
 set "DP_ARGS=--privacy_mode central --dp_clip_norm %DP_CLIP_NORM% %COMMON_DP_ARGS% --dp_noise_multiplier 0.0 --dp_channel_noise_multiplier %CHANNEL_SIGMA%"
 set "BASE_ARGS=--dataset %DATASET% --model %MODEL% --epochs %EPOCHS% --num_users %NUM_USERS% --num_selected %NUM_SELECTED% --local_ep %LOCAL_EP% --local_bs %LOCAL_BS% --lr %LR% --dirichlet_alpha %DIRICHLET_ALPHA% --test_size %TEST_SIZE% --gpu %GPU_ID%"
 set "ENERGY_ARGS=--use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0"
-set "LYAP_ARGS=--use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0 --selection_beta %SELECTION_BETA%"
+set "LYAP_ARGS=--use_lyapunov --lyapunov_V 10.0 --energy_budget 5.0"
 set "SV_UPDATE_ARGS=--shapley_update_method mean --shapley_alpha 0.5"
 set "SV_CC_ARGS=--shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 --shapley_max_iter 20"
 

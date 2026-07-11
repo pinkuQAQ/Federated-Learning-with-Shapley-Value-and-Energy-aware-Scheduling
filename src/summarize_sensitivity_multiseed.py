@@ -88,8 +88,7 @@ def mean_std(values):
     arr = arr[np.isfinite(arr)]
     if arr.size == 0:
         return np.nan, np.nan
-    std = float(arr.std(ddof=1)) if arr.size > 1 else 0.0
-    return float(arr.mean()), std
+    return float(arr.mean()), float(arr.std(ddof=0))
 
 
 def fmt_pm(mean, std):

@@ -81,16 +81,10 @@ class LyapunovTripleScheduler:
             selected_clients: Selected client ids.
             round_num: Current communication round.
         """
-        selected_clients = np.asarray(selected_clients, dtype=np.int64)
-        energy_consumed = np.asarray(energy_consumed, dtype=np.float64)
-        if selected_clients.size != energy_consumed.size:
-            raise ValueError("selected_clients and energy_consumed must have equal length")
-
-        round_energy = np.zeros(self.num_clients, dtype=np.float64)
-        round_energy[selected_clients] = energy_consumed
-        self.energy_queue = np.maximum(
-            0.0,
-            self.energy_queue + round_energy - self.energy_budget,
+        # Positive values mean this round exceeded the per-client budget.
+        energy_violation = energy_consumed - self.energy_budget
+        self.energy_queue[selected_clients] = np.maximum(
+            0, self.energy_queue[selected_clients] + energy_violation
         )
 
         # Record history.
@@ -135,21 +129,16 @@ class LyapunovTripleScheduler:
         sv_norm = self._minmax(shapley_values, default=1.0)
 
         energy_consumed = np.asarray(energy_consumed, dtype=np.float64)
-        energy_consumed = np.nan_to_num(
-            energy_consumed,
-            nan=0.0,
-            posinf=np.finfo(np.float64).max,
-            neginf=0.0,
-        )
+        energy_max = np.nanmax(energy_consumed)
+        if np.isfinite(energy_max) and energy_max > 1e-10:
+            energy_norm = energy_consumed / energy_max
+        else:
+            energy_norm = np.zeros_like(energy_consumed)
 
         if battery_scores is None:
             battery_norm = np.zeros_like(sv_norm)
         else:
-            battery_norm = np.clip(
-                np.nan_to_num(battery_scores, nan=0.0, posinf=1.0, neginf=0.0),
-                0.0,
-                1.0,
-            )
+            battery_norm = self._minmax(battery_scores, default=1.0)
 
         if channel_gains is None:
             channel_norm = np.zeros_like(sv_norm)
@@ -169,7 +158,7 @@ class LyapunovTripleScheduler:
         if disable_queue_penalty:
             scores = self.V * utility
         else:
-            scores = self.V * utility - self.energy_queue * energy_consumed
+            scores = self.V * utility - self.energy_queue * energy_norm
 
         return scores
 
@@ -178,8 +167,7 @@ class LyapunovTripleScheduler:
         return {
             'queue_mean': np.mean(self.energy_queue),
             'queue_max': np.max(self.energy_queue),
-            'lyapunov_value': self.lyapunov_history[-1] if self.lyapunov_history else 0,
-            'energy_queue': self.energy_queue.copy(),
+            'lyapunov_value': self.lyapunov_history[-1] if self.lyapunov_history else 0
         }
 
     def print_statistics(self, round_num: int):

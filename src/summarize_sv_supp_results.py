@@ -85,7 +85,6 @@ def load_record(path, group, label=None):
         cons_values = np.asarray([], dtype=np.float64)
 
     lyap_stats = data.get("lyapunov_statistics", {}) or {}
-    constraint_stats = data.get("energy_constraint_statistics", {}) or {}
     shapley_time = data.get("shapley_time_history", []) or []
     shapley_times = np.asarray(
         [as_float(item.get("time_s")) for item in shapley_time if isinstance(item, dict) and "time_s" in item],
@@ -108,8 +107,6 @@ def load_record(path, group, label=None):
         "shapley_estimator": args.get("shapley_estimator", ""),
         "shapley_allocation": args.get("shapley_allocation", ""),
         "shapley_max_iter": int(args.get("shapley_max_iter", 0) or 0),
-        "selection_beta": as_float(args.get("selection_beta")),
-        "initial_rounds": int(args.get("initial_rounds", 0) or 0),
         "final_acc": as_float(acc[-1]) if acc.size else np.nan,
         "last5_acc": as_float(acc[-min(5, len(acc)):].mean()) if acc.size else np.nan,
         "best_acc": as_float(acc.max()) if acc.size else np.nan,
@@ -124,13 +121,6 @@ def load_record(path, group, label=None):
         "queue_mean": as_float(lyap_stats.get("queue_mean")),
         "queue_max": as_float(lyap_stats.get("queue_max")),
         "lyapunov_value": as_float(lyap_stats.get("lyapunov_value")),
-        "max_time_average_energy": as_float(constraint_stats.get("max_time_average_energy")),
-        "mean_time_average_energy": as_float(constraint_stats.get("mean_time_average_energy")),
-        "max_budget_violation": as_float(constraint_stats.get("max_budget_violation")),
-        "mean_budget_violation": as_float(constraint_stats.get("mean_budget_violation")),
-        "constraint_satisfied_fraction": as_float(constraint_stats.get("constraint_satisfied_fraction")),
-        "queue_over_horizon_max": as_float(np.max(constraint_stats.get("queue_over_horizon", [])))
-        if np.asarray(constraint_stats.get("queue_over_horizon", [])).size else np.nan,
         "privacy_epsilon": as_float(dp_stats.get("update_epsilon")),
         "channel_sigma": as_float(dp_stats.get("channel_noise_multiplier", args.get("dp_channel_noise_multiplier", np.nan))),
         "participation_std": as_float(np.nanstd(participation)) if participation.size else np.nan,
@@ -143,8 +133,7 @@ def mean_std(values):
     arr = arr[np.isfinite(arr)]
     if arr.size == 0:
         return np.nan, np.nan
-    std = float(arr.std(ddof=1)) if arr.size > 1 else 0.0
-    return float(arr.mean()), std
+    return float(arr.mean()), float(arr.std(ddof=0))
 
 
 def summarize(records, metric_keys):
@@ -261,12 +250,6 @@ def main():
         "avg_round_energy",
         "queue_mean",
         "queue_max",
-        "max_time_average_energy",
-        "mean_time_average_energy",
-        "max_budget_violation",
-        "mean_budget_violation",
-        "constraint_satisfied_fraction",
-        "queue_over_horizon_max",
         "participation_std",
     ]
 
