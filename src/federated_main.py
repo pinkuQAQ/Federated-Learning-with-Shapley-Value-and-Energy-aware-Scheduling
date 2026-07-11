@@ -62,7 +62,7 @@ from shapley import MCShapley
 from selection import (hybrid_selection, random_selection, round_robin_selection,
                        greedy_shapley_selection, energy_aware_selection,
                        hybrid_energy_aware_selection, power_of_choice_selection,
-                       ucb_selection, OortSelector,
+                       softmax_score_selection, ucb_selection, OortSelector,
                        gradient_channel_aware_selection)
 from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
@@ -147,6 +147,12 @@ def _get_trainable_clients(user_groups, num_users):
     if user_groups is None:
         return list(range(num_users))
     return [i for i in range(num_users) if len(user_groups[i]) > 0]
+
+
+def _resolve_initial_rounds(args):
+    if args.initial_rounds is None:
+        return max(1, math.ceil(args.num_users / args.num_selected))
+    return max(1, int(args.initial_rounds))
 
 
 def _filter_available_clients(available_clients, trainable_clients):
@@ -364,15 +370,20 @@ def _effective_noise_multipliers(args, target_multiplier):
     return 0.0, channel, channel
 
 
-def _add_central_dp_noise(global_state, averaged_state, args, selected_count):
-    """Add central-DP Gaussian noise to the aggregated update."""
+def _add_central_dp_noise(global_state, averaged_state, args, selected_count,
+                          aggregation_max_weight=None):
+    """Add aggregate Gaussian noise with fixed client-count normalization."""
     selected_count = max(int(selected_count), 1)
     layer_mode = getattr(args, 'dp_clip_scope', 'global') == 'layer'
     layer_clip_norms = getattr(args, '_current_dp_layer_clip_norms', {}) if layer_mode else {}
     clip_norm = max(float(getattr(args, '_current_dp_clip_norm', args.dp_clip_norm)), 1e-12)
     target_multiplier = float(getattr(args, '_current_dp_noise_multiplier', args.dp_noise_multiplier))
     alg_multiplier, channel_multiplier, effective_multiplier = _effective_noise_multipliers(args, target_multiplier)
-    default_noise_std = effective_multiplier * clip_norm / selected_count
+    if aggregation_max_weight is None:
+        aggregation_max_weight = 1.0 / selected_count
+    aggregation_max_weight = min(max(float(aggregation_max_weight), 0.0), 1.0)
+    noise_scale_weight = 1.0 / selected_count
+    default_noise_std = effective_multiplier * clip_norm * noise_scale_weight
 
     noised_state = copy.deepcopy(averaged_state)
     noise_sq_norm = 0.0
@@ -386,8 +397,8 @@ def _add_central_dp_noise(global_state, averaged_state, args, selected_count):
             noised_state[key] = avg_tensor.clone()
             continue
         key_clip_norm = max(float(layer_clip_norms.get(key, clip_norm)), 1e-12) if layer_mode else clip_norm
-        alg_std = alg_multiplier * key_clip_norm / selected_count
-        ch_std = channel_multiplier * key_clip_norm / selected_count
+        alg_std = alg_multiplier * key_clip_norm * noise_scale_weight
+        ch_std = channel_multiplier * key_clip_norm * noise_scale_weight
         noise_std = math.sqrt(alg_std * alg_std + ch_std * ch_std)
         noise_stds.append(noise_std)
         alg_noise_stds.append(alg_std)
@@ -417,6 +428,9 @@ def _add_central_dp_noise(global_state, averaged_state, args, selected_count):
         'channel_noise_norm': channel_noise_sq_norm ** 0.5,
         'clip_scope': getattr(args, 'dp_clip_scope', 'global'),
         'layer_clip_norms': layer_clip_norms,
+        'aggregation_max_weight': aggregation_max_weight,
+        'noise_scale_weight': noise_scale_weight,
+        'noise_scaling': 'selected_count',
     }
 
 
@@ -624,9 +638,18 @@ def _select_lyapunov(args, epoch, num_selected, shapley_values,
                      energy_manager, lyapunov_optimizer, user_groups):
     """Lyapunov路径：前initial_rounds轮轮询初始化SV，之后Lyapunov动态选择"""
     if epoch < args.initial_rounds:
-        return round_robin_selection(
-            args.num_users, num_selected, epoch, client_participation_counts
+        candidates = (
+            list(range(args.num_users))
+            if available_clients is None
+            else [int(client_id) for client_id in available_clients]
         )
+        if client_participation_counts is None:
+            if candidates:
+                offset = (epoch * num_selected) % len(candidates)
+                candidates = candidates[offset:] + candidates[:offset]
+        else:
+            candidates.sort(key=lambda client_id: (client_participation_counts[client_id], client_id))
+        return candidates[:min(num_selected, len(candidates))]
 
     all_data_sizes = _get_client_data_sizes(user_groups, args.num_users) if user_groups is not None else None
     energy_consumed_estimate = energy_manager.compute_energy_consumption(
@@ -644,15 +667,12 @@ def _select_lyapunov(args, epoch, num_selected, shapley_values,
         disable_queue_penalty=getattr(args, 'disable_queue_penalty', False),
     )
 
-    # 在可用客户端（含Poisson子采样）内选择
-    if available_clients and len(available_clients) >= num_selected:
-        scores_masked = np.full(len(scores), -np.inf)
-        for c in available_clients:
-            scores_masked[c] = scores[c]
-    else:
-        scores_masked = scores
-
-    return np.argsort(scores_masked)[-num_selected:].tolist()
+    return softmax_score_selection(
+        scores=scores,
+        num_selected=num_selected,
+        temperature=args.selection_beta,
+        available_clients=available_clients,
+    )
 
 
 def _select_energy_aware(args, epoch, num_selected, initial_rounds,
@@ -734,30 +754,31 @@ def _select_lyapunov_without_shapley(args, epoch, num_selected, available_client
 
 
 def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
-                          round_client_models, global_model, val_data_loader,
+                          round_client_models, val_data_loader,
                           user_groups, client_participation_counts,
+                          shapley_observation_counts=None,
                           shapley_time_history=None):
     """计算并更新Shapley值，同时清理旧数据"""
-    if not args.use_shapley or epoch < 1:
+    if not args.use_shapley:
         return
 
-    prev_round_data = round_client_models.get(epoch - 1)
+    round_data = round_client_models.get(epoch)
 
-    if not prev_round_data or len(prev_round_data['selected_clients']) == 0:
+    if not round_data or len(round_data['selected_clients']) == 0:
         if args.verbose:
-            print(f"  [Shapley] 轮次 {epoch - 1} 无数据，跳过Shapley计算")
+            print(f"  [Shapley] 轮次 {epoch + 1} 无数据，跳过Shapley计算")
         return
 
-    prev_selected = prev_round_data['selected_clients']
-    prev_models = prev_round_data['client_models']
+    selected_clients = round_data['selected_clients']
+    client_models = round_data['client_models']
 
     client_model_list = []
     client_id_list = []
     client_data_size_list = []
 
-    for client_id in prev_selected:
-        if client_id in prev_models:
-            client_model_list.append(prev_models[client_id])
+    for client_id in selected_clients:
+        if client_id in client_models:
+            client_model_list.append(client_models[client_id])
             client_id_list.append(client_id)
             data_size = len(user_groups[client_id]) * TRAIN_SPLIT_RATIO
             client_data_size_list.append(int(data_size))
@@ -765,22 +786,24 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
     if len(client_model_list) == 0:
         return
 
-    print(f"  [Shapley] 计算轮次 {epoch} 的Shapley值（{len(client_id_list)}个客户端, estimator={args.shapley_estimator}）...")
+    print(f"  [Shapley] 计算轮次 {epoch + 1} 的Shapley值（{len(client_id_list)}个客户端, estimator={args.shapley_estimator}）...")
 
     try:
         _t0 = time.time()
         round_shapley = shapley_calculator.compute_with_history(
-            previous_model=prev_round_data['previous_global'],
+            previous_model=round_data['previous_global'],
             client_models=client_model_list,
-            current_global_model=global_model.state_dict(),
+            current_global_model=round_data['current_global'],
             val_data_loader=val_data_loader,
             client_ids=client_id_list,
             client_data_sizes=client_data_size_list
         )
+        if len(round_shapley) != len(client_id_list):
+            raise ValueError("Shapley result length does not match selected clients")
         _shapley_elapsed = time.time() - _t0
         if shapley_time_history is not None:
             shapley_time_history.append({
-                'round': epoch,
+                'round': epoch + 1,
                 'time_s': _shapley_elapsed,
                 'estimator': args.shapley_estimator,
                 'allocation': getattr(args, 'shapley_allocation', 'uniform'),
@@ -790,11 +813,14 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
         for i, client_id in enumerate(client_id_list):
             raw_sv = round_shapley[i]
             if not np.isfinite(float(raw_sv)):
-                raw_sv = 0.0
+                continue
             new_sv = float(raw_sv)
 
             if args.shapley_update_method == 'mean':
-                old_count = max(0, client_participation_counts[client_id] - 1)
+                if shapley_observation_counts is None:
+                    old_count = max(0, int(client_participation_counts[client_id]) - 1)
+                else:
+                    old_count = int(shapley_observation_counts[client_id])
                 if old_count > 0:
                     shapley_values[client_id] = (
                         shapley_values[client_id] * old_count + new_sv
@@ -812,6 +838,10 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
 
             if not np.isfinite(float(shapley_values[client_id])):
                 shapley_values[client_id] = 0.0
+                continue
+
+            if shapley_observation_counts is not None:
+                shapley_observation_counts[client_id] += 1
 
             updated_count += 1
 
@@ -833,17 +863,16 @@ def update_shapley_values(args, epoch, shapley_values, shapley_calculator,
 
     except Exception as e:
         print(f"  [Shapley] 计算失败: {e}")
-        for client_id in client_id_list:
-            shapley_values[client_id] = 0.0
 
     # Fix 2: 清理旧的round_client_models防止内存泄漏
-    if epoch >= 2 and (epoch - 2) in round_client_models:
-        del round_client_models[epoch - 2]
+    if epoch >= 1 and (epoch - 1) in round_client_models:
+        del round_client_models[epoch - 1]
 
 
 def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_accuracy,
                  test_accuracies, test_acc, shapley_values, client_participation_counts,
-                 client_last_round, energy_manager, lyapunov_optimizer,
+                 client_last_round, shapley_observation_counts,
+                 energy_manager, lyapunov_optimizer,
                  start_time, sv_sample_size=0, ucb_rewards=None, ucb_counts=None,
                  dp_round_history=None, shapley_time_history=None,
                  oort_selector=None):
@@ -889,6 +918,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
             'shapley_values': shapley_values,
             'client_participation_counts': client_participation_counts,
             'client_last_round': client_last_round,
+            'shapley_observation_counts': shapley_observation_counts,
             'shapley_time_history': shapley_time_history or [],
         })
 
@@ -902,10 +932,26 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
 
     if args.use_lyapunov and lyapunov_optimizer is not None:
         lyap_stats = lyapunov_optimizer.get_statistics()
+        time_average_energy = np.asarray([], dtype=np.float64)
+        energy_violation = np.asarray([], dtype=np.float64)
+        if args.use_energy and energy_manager is not None:
+            time_average_energy = (
+                energy_manager.initial_energy - energy_manager.client_energy
+            ) / max(int(args.epochs), 1)
+            energy_violation = np.maximum(time_average_energy - args.energy_budget, 0.0)
         save_data.update({
             'lyapunov_statistics': lyap_stats,
             'lyapunov_history': lyapunov_optimizer.lyapunov_history,
             'queue_history': lyapunov_optimizer.queue_history,
+            'energy_constraint_statistics': {
+                'time_average_energy_per_client': time_average_energy,
+                'max_time_average_energy': float(np.max(time_average_energy)) if time_average_energy.size else 0.0,
+                'mean_time_average_energy': float(np.mean(time_average_energy)) if time_average_energy.size else 0.0,
+                'max_budget_violation': float(np.max(energy_violation)) if energy_violation.size else 0.0,
+                'mean_budget_violation': float(np.mean(energy_violation)) if energy_violation.size else 0.0,
+                'constraint_satisfied_fraction': float(np.mean(energy_violation <= 1e-12)) if energy_violation.size else 1.0,
+                'queue_over_horizon': np.asarray(lyap_stats['energy_queue']) / max(int(args.epochs), 1),
+            },
         })
 
     if args.selection_method == 'ucb' and ucb_rewards is not None:
@@ -1022,6 +1068,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 if args.use_lyapunov:
                     f.write(f"- 调度方式: Lyapunov动态权重 (V={args.lyapunov_V})\n")
                     f.write(f"- 能量预算: {args.energy_budget}\n")
+                    f.write(f"- 分数Softmax温度 beta: {args.selection_beta}\n")
                 else:
                     f.write(f"- Shapley权重: {args.shapley_weight}\n")
                     f.write(f"- 能量权重: {args.energy_weight}\n")
@@ -1062,7 +1109,10 @@ if __name__ == '__main__':
         torch.cuda.manual_seed(args.seed)
 
     num_selected = args.num_selected
-    initial_rounds = max(1, args.num_users // num_selected)
+    initial_rounds = _resolve_initial_rounds(args)
+    args.initial_rounds = initial_rounds
+    if not np.isfinite(args.selection_beta) or args.selection_beta <= 0:
+        raise ValueError("selection_beta must be a positive finite value")
 
     if torch.cuda.is_available() and int(getattr(args, 'gpu', 0)) >= 0:
         device = torch.device(f"cuda:{int(args.gpu)}")
@@ -1106,6 +1156,7 @@ if __name__ == '__main__':
 
         shapley_values = np.zeros(args.num_users)
         client_participation_counts = np.zeros(args.num_users)
+        shapley_observation_counts = np.zeros(args.num_users, dtype=np.int64)
         client_last_round = -np.ones(args.num_users)
 
         round_client_models = {}
@@ -1151,6 +1202,7 @@ if __name__ == '__main__':
             else None
         )
         client_last_round = None
+        shapley_observation_counts = None
         round_client_models = None
         val_data_loader = None
 
@@ -1193,6 +1245,7 @@ if __name__ == '__main__':
         print("\n" + "=" * 60)
         print("启用李雅普诺夫动态权重优化")
         print(f"控制参数 V: {args.lyapunov_V}")
+        print(f"分数Softmax温度 beta: {args.selection_beta}")
         print(f"学习率: {args.lyapunov_lr}")
         print("=" * 60 + "\n")
 
@@ -1204,12 +1257,8 @@ if __name__ == '__main__':
             energy_budget=args.energy_budget
         )
 
-        prev_selected_clients = []
-        prev_energy_consumed = None
     else:
         lyapunov_optimizer = None
-        prev_selected_clients = []
-        prev_energy_consumed = None
 
     # ============= UCB 状态初始化 =============
     if args.selection_method == 'ucb' and not args.use_shapley:
@@ -1266,17 +1315,6 @@ if __name__ == '__main__':
 
         global_model.train()
 
-        # ============= 李雅普诺夫权重更新 =============
-        if args.use_lyapunov and lyapunov_optimizer is not None and epoch >= args.initial_rounds:
-            if len(prev_selected_clients) > 0 and prev_energy_consumed is not None:
-                lyapunov_optimizer.update_queue(
-                    energy_consumed=prev_energy_consumed,
-                    selected_clients=prev_selected_clients,
-                    round_num=epoch
-                )
-                if args.verbose and epoch % print_every == 0:
-                    lyapunov_optimizer.print_statistics(epoch)
-
         # ============= Power of Choice: 候选池损失评估 (Fix 11: 高效实现) =============
         if args.selection_method == 'poc' and epoch > 0:
             candidates, candidate_losses = evaluate_poc_candidates(
@@ -1321,8 +1359,16 @@ if __name__ == '__main__':
             ucb_rewards=ucb_rewards, ucb_counts=ucb_counts,
             oort_selector=oort_selector,
         )
+        if available_clients is None:
+            selection_candidates = trainable_clients
+            target_selection_count = num_selected
+        else:
+            selection_candidates = available_clients
+            target_selection_count = min(num_selected, len(selection_candidates))
+        if target_selection_count == 0:
+            raise RuntimeError("No energy-feasible trainable clients are available for this round.")
         idxs_users = _ensure_trainable_selection(
-            idxs_users, trainable_clients, num_selected,
+            idxs_users, selection_candidates, target_selection_count,
             client_participation_counts if client_participation_counts is not None else None
         )
 
@@ -1330,10 +1376,6 @@ if __name__ == '__main__':
             print(f"选择的客户端: {sorted(idxs_users)}")
             print(f"客户端参与次数统计: 平均={np.mean(client_participation_counts):.1f}, "
                   f"最小={np.min(client_participation_counts)}, 最大={np.max(client_participation_counts)}")
-
-        # 保存本轮选择的客户端（用于下一轮李雅普诺夫更新）
-        if args.use_lyapunov and lyapunov_optimizer is not None:
-            prev_selected_clients = list(idxs_users) if isinstance(idxs_users, np.ndarray) else idxs_users.copy()
 
         # 保存当前全局模型（用于Shapley计算）
         if args.use_shapley:
@@ -1457,7 +1499,15 @@ if __name__ == '__main__':
                 client_data_sizes=all_data_sizes
             )
             energy_manager.update_client_energy(idxs_users, energy_consumed)
-            prev_energy_consumed = energy_consumed.copy()
+
+            if args.use_lyapunov and lyapunov_optimizer is not None:
+                lyapunov_optimizer.update_queue(
+                    energy_consumed=energy_consumed,
+                    selected_clients=idxs_users,
+                    round_num=epoch + 1,
+                )
+                if args.verbose and epoch % print_every == 0:
+                    lyapunov_optimizer.print_statistics(epoch + 1)
 
             if args.verbose and epoch % print_every == 0:
                 print(f"  [能量] 本轮平均消耗: {np.mean(energy_consumed):.2f}")
@@ -1470,6 +1520,11 @@ if __name__ == '__main__':
             client_data_sizes.append(int(data_size))
 
         global_weights = average_weights(local_weights, client_data_sizes)
+        if args.use_shapley:
+            round_client_models[epoch]['current_global'] = copy.deepcopy(global_weights)
+
+        total_selected_data = max(sum(client_data_sizes), 1)
+        aggregation_max_weight = max(client_data_sizes) / total_selected_data
         if getattr(args, 'privacy_mode', 'none') == 'central':
             args._current_dp_noise_multiplier = _noise_multiplier_for_round(args, epoch, args.epochs)
             if getattr(args, 'dp_channel_assisted', False) and 'channel_gains' in locals() and channel_gains is not None:
@@ -1480,7 +1535,8 @@ if __name__ == '__main__':
                 previous_global_model if args.use_shapley else global_model.state_dict(),
                 global_weights,
                 args,
-                len(idxs_users)
+                len(idxs_users),
+                aggregation_max_weight=aggregation_max_weight,
             )
             dp_round_history.append({
                 'round': epoch,
@@ -1503,6 +1559,9 @@ if __name__ == '__main__':
                 'clip_norm': central_dp_stats['clip_norm'],
                 'clip_scope': central_dp_stats.get('clip_scope', getattr(args, 'dp_clip_scope', 'global')),
                 'adaptive_clip': bool(getattr(args, 'dp_adaptive_clip', False)),
+                'aggregation_max_weight': central_dp_stats.get('aggregation_max_weight', aggregation_max_weight),
+                'noise_scale_weight': central_dp_stats.get('noise_scale_weight', 1.0 / max(len(idxs_users), 1)),
+                'noise_scaling': central_dp_stats.get('noise_scaling', 'selected_count'),
             })
         global_model.load_state_dict(global_weights)
 
@@ -1517,8 +1576,9 @@ if __name__ == '__main__':
         if args.use_shapley:
             update_shapley_values(
                 args, epoch, shapley_values, shapley_calculator,
-                round_client_models, global_model, val_data_loader,
+                round_client_models, val_data_loader,
                 user_groups, client_participation_counts,
+                shapley_observation_counts=shapley_observation_counts,
                 shapley_time_history=shapley_time_history
             )
 
@@ -1640,6 +1700,7 @@ if __name__ == '__main__':
         args, exp_folder, timestamp, num_selected,
         train_loss, train_accuracy, test_accuracies, test_acc,
         shapley_values, client_participation_counts, client_last_round,
+        shapley_observation_counts,
         energy_manager, lyapunov_optimizer,
         start_time,
         sv_sample_size=sv_sample_size if args.use_shapley else 0,

@@ -29,7 +29,7 @@
 \maketitle
 
 \begin{abstract}
-Client selection in federated learning (FL) needs to consider both learning value and resource sustainability. In non-IID data settings, some clients can provide more useful updates, but selecting these clients too frequently may bring long-term energy imbalance in wireless edge systems. This paper proposes a Shapley-guided energy-constrained scheduler for synchronous cross-device FL. The server keeps persistent Shapley contribution estimates by a lightweight complementary-contribution sampler, records per-client energy pressure by virtual queues, and selects feasible clients according to a score-based distribution. We also add an auxiliary channel-noise diagnostic module, which clips client updates and models receiver-side channel uncertainty as equivalent Gaussian perturbation on the released aggregate. This module gives a common noisy-release reference for noise--utility analysis. We characterize the selection effect caused by the proposed score rule. On CIFAR-10 with $\alpha=0.1$, three seeds, and $T=100$ rounds, the proposed scheduler obtains the best last-5-round accuracy among the compared baselines while keeping explicit energy accounting. Ablation results show that the Shapley signal improves the deployable energy-aware scheduler, and the virtual queue provides the long-term energy-accounting mechanism. Sensitivity studies further examine data heterogeneity, sampling budget, and channel-noise diagnostics.
+Client selection in federated learning (FL) needs to consider both learning value and resource sustainability. In non-IID data settings, some clients can provide more useful updates, but selecting these clients too frequently may bring long-term energy imbalance in wireless edge systems. This paper proposes a Shapley-guided energy-constrained scheduler for synchronous cross-device FL. The server keeps persistent Shapley contribution estimates by a lightweight complementary-contribution sampler, records per-client energy pressure by virtual queues, and selects feasible clients according to a score-based distribution. We also add an auxiliary channel-noise diagnostic module, which clips client updates and models receiver-side channel uncertainty as equivalent Gaussian perturbation on the released aggregate. This module gives a common noisy-release reference for noise--utility analysis. We characterize the selection effect caused by the proposed score rule. On CIFAR-10 with $\alpha=0.1$, three seeds, and $T=100$ rounds, the proposed scheduler obtains the best last-5-round accuracy among the compared baselines while keeping explicit energy accounting. Additional Fashion-MNIST and MNIST runs show that the method keeps competitive accuracy under the same non-IID client-scheduling protocol. Ablation results show that the Shapley signal improves the deployable energy-aware scheduler, and the virtual queue provides the long-term energy-accounting mechanism. Sensitivity studies further examine data heterogeneity, sampling budget, and channel-noise diagnostics.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -61,7 +61,7 @@ The main contributions of this paper are summarized as follows:
 
 \item We characterize the score-based selection process, discuss the estimator's sampling behavior, and provide a finite-time energy-accounting property for the virtual queue recursion.
 
-\item We validate the proposed scheduler on CIFAR-10 through ablation, heterogeneity sensitivity, sampling-budget sensitivity, and channel-noise diagnostic analysis, showing gains over representative baselines under the tested non-IID setting.
+\item We validate the proposed scheduler on CIFAR-10 through ablation, heterogeneity sensitivity, sampling-budget sensitivity, and channel-noise diagnostic analysis, and we add Fashion-MNIST and MNIST checks to examine whether the same scheduling behavior transfers across datasets.
 \end{enumerate}
 
 \begin{figure*}[!t]
@@ -338,21 +338,24 @@ Let $\Delta w_n(t)=\tilde{w}_n^{t+1}-w_t$ denote the model update of client $n$.
 \end{equation}
 where $C_t>0$ is the clipping norm. In the implementation, clipping is applied layer by layer. For each layer, the server computes the update norms of selected clients, takes a fixed percentile of these norms as the current-round scale estimate, and updates the clipping threshold by exponential moving average (EMA) smoothing. The clipped updates are then used to form a weighted aggregate $\bar{\Delta w}(t)$.
 
-The released aggregate is perturbed by the equivalent channel-noise term:
+The released aggregate is perturbed by an equivalent layer-wise channel-noise term:
 \begin{equation}
 \label{eq:ch_noise}
-\tilde{\Delta w}(t)=\bar{\Delta w}(t)+z_{\mathrm{ch}}(t),
-\qquad
-z_{\mathrm{ch}}(t)\sim
-\mathcal{N}\!\left(0,\sigma_{\mathrm{eq},t}^2C_t^2\omega_t^2I\right),
+\begin{aligned}
+\tilde{\Delta w}_{\ell}(t)
+&=\bar{\Delta w}_{\ell}(t)+z_{\mathrm{ch},\ell}(t),\\
+z_{\mathrm{ch},\ell}(t)
+&\sim \mathcal{N}\!\left(
+0,\frac{\sigma_{\mathrm{eq},t}^2C_{\ell,t}^2}{K_t^2}I\right).
+\end{aligned}
 \end{equation}
-where $\omega_t=\max_{n\in\mathcal{S}_t}|\mathcal{D}_n|/\sum_{i\in\mathcal{S}_t}|\mathcal{D}_i|$. Since each clipped update has norm at most $C_t$, the per-round $L_2$ sensitivity scale of the released aggregate to replacing one client's update is bounded by $\Delta_2\leq\omega_tC_t$. Therefore, the perturbation follows a Gaussian-style scaling, where $\sigma_{\mathrm{eq},t}$ controls the equivalent channel-noise multiplier relative to the clipped aggregate scale.
+where $K_t=|\mathcal{S}_t|$ is the number of clients participating in round $t$, $C_{\ell,t}$ is the adaptive clipping threshold of layer $\ell$, and $\sigma_{\mathrm{eq},t}$ controls the equivalent channel-noise multiplier. The factor $1/K_t$ provides a client-count-normalized perturbation scale that is applied consistently across scheduling methods. Because the simulator uses data-size-weighted aggregation, this diagnostic scale is not presented as a formal sensitivity bound or differential-privacy guarantee.
 
 This construction provides a wireless-channel-noise diagnostic for the digital FL simulator. It gives every compared scheduler the same clipped noisy-release condition and reports the corresponding noise--utility behavior. The same interface can also include richer receiver-side models, such as client-specific noise levels, power-control-dependent perturbations, or link-adaptive aggregation rules.
 
 \subsection{Aggregation and State Refresh}
 
-After the selected clients finish local training, the server receives their updates and enters the state-refresh stage. First, each returned update is clipped by the adaptive threshold described in Section~\ref{sec:system}. Then the server forms the weighted aggregate and applies the channel-noise diagnostic to the released aggregate. For weighted aggregation, the diagnostic scale is $\sigma_{\mathrm{eq},t}C_t\omega_t$, where $\omega_t$ is the largest selected-client aggregation weight. For balanced selected clients, it reduces to the simpler $\sigma_{\mathrm{eq},t}C_t/K_t$ expression.
+After the selected clients finish local training, the server receives their updates and enters the state-refresh stage. First, each returned update is clipped by the adaptive threshold described in Section~\ref{sec:system}. Then the server forms the weighted aggregate and applies the channel-noise diagnostic to the released aggregate. For each layer $\ell$, the diagnostic standard deviation is $\sigma_{\mathrm{eq},t}C_{\ell,t}/K_t$, independently of the realized data-size aggregation weights. The actual maximum aggregation weight is recorded for analysis, but it does not determine the diagnostic noise magnitude.
 
 Second, the server evaluates the selected clients' contributions by using the clipped updates before equivalent channel noise is applied. This keeps contribution estimation related to the clients' uploaded learning signal, while the released global update is still consistent with the channel-noise diagnostic setting.
 
@@ -452,7 +455,7 @@ We conduct experiments on the CIFAR-10 dataset (60,000 images, 10 classes). The 
 
 We simulate $N=100$ clients with $K=5$ selected per round over $T=100$ rounds. Local training uses SGD (momentum 0.5, learning rate 0.01) with batch size 32 and $\tau=2$ local epochs. Data are partitioned via a Dirichlet distribution with $\alpha=0.1$, which creates a challenging non-IID CIFAR-10 regime for evaluating contribution-aware scheduling.
 
-For our method, the control parameter is set to $V=10.0$, and the energy budget is $\bar{E}=5.0$ J per round. The instantaneous scheduling utility uses weights $\lambda_s=0.70$, $\lambda_b=0.15$, and $\lambda_c=0.15$ for Shapley contribution, residual battery state, and channel quality. Each client is initialized with $E_{\text{init}}=500$ J, and the energy threshold is $E_{\text{threshold}}=50$ J. The channel follows a Rayleigh fading model. For the scheduling-energy term, we use the normalized capped inverse-channel instantiation of the uplink model in Section~\ref{sec:system}. This setting keeps the ordering effect of Shannon-rate inversion and avoids dependence on a particular radio payload and bandwidth configuration. The receiver-side channel-noise diagnostic uses nominal noise power $\sigma_{\text{ch}}^2=1.0$. Shapley values are estimated by the default complementary-contribution sampler with a small budget of representative strata, and they are persisted by a running mean over observed rounds. The first $R=\lceil N/K\rceil=20$ rounds use round-robin initialization to bootstrap contribution estimates. We further vary the sampling budget in a sensitivity study to examine the accuracy-cost tradeoff of the Shapley estimator.
+For our method, the control parameter is set to $V=10.0$, and the energy budget is $\bar{E}=5.0$ J per round. The instantaneous scheduling utility uses weights $\lambda_s=0.70$, $\lambda_b=0.15$, and $\lambda_c=0.15$ for Shapley contribution, residual battery state, and channel quality. The score-induced sampler uses temperature $\beta=1.0$. Each client is initialized with $E_{\text{init}}=500$ J, and the energy threshold is $E_{\text{threshold}}=50$ J. The channel follows a Rayleigh fading model. For the scheduling-energy term, we use the normalized capped inverse-channel instantiation of the uplink model in Section~\ref{sec:system}. This setting keeps the ordering effect of Shannon-rate inversion and avoids dependence on a particular radio payload and bandwidth configuration. The receiver-side channel-noise diagnostic uses nominal noise power $\sigma_{\text{ch}}^2=1.0$ and layer-wise standard deviation $\sigma_{\mathrm{eq},t}C_{\ell,t}/K_t$. Shapley values are estimated by the default complementary-contribution sampler with a small budget of representative strata, and they are persisted by a running mean over observed rounds. The first $R=\lceil N/K\rceil=20$ rounds use round-robin initialization to bootstrap contribution estimates. We further vary the sampling budget in a sensitivity study to examine the accuracy-cost tradeoff of the Shapley estimator.
 
 The main scheduler comparison is conducted on CIFAR-10 with $\alpha=0.1$. All methods use the same model, local training, energy model, validation proxy, and channel-noise diagnostic setting. Specifically, every compared method clips uploaded updates and uses the same nominal channel-noise multiplier $\gamma_{\mathrm{ch}}=0.1$. The update clipping norm starts from $C=1.0$ and uses layer-wise adaptive clipping with percentile $p=80$, EMA factor $\rho=0.8$, growth cap $1.2$, and range $[0.05,1.0]$. The resulting perturbation comes from the realized equivalent channel multiplier $\sigma_{\mathrm{eq},t}$. Thus, different schedulers are compared under a consistent noisy wireless-release condition.
 
@@ -466,30 +469,42 @@ Unless otherwise stated, all methods use the same model architecture, local trai
 
 \subsection{Main Comparison}
 
-Table~\ref{tab:main} reports the main CIFAR-10 scheduling results with $\alpha=0.1$ and $T=100$, averaged over three seeds. All methods use the same model, local training protocol, data partition, energy model, and channel-noise diagnostic setting. Therefore, the comparison mainly reflects the difference of scheduling rules under the same perturbation protocol. The proposed scheduler obtains the best last-5-round and final accuracy.
+Table~\ref{tab:main} reports the main CIFAR-10 scheduling results and the additional Fashion-MNIST/MNIST checks under $\alpha=0.1$ and $T=100$, averaged over three seeds. All methods use the same local training protocol, data partition, energy model, and channel-noise diagnostic setting within each dataset. Therefore, the table mainly reflects the difference of scheduling rules under matched perturbation protocols.
 
 \begin{table}[t]
 \centering
-\caption{Main CIFAR-10 accuracy results.}
+\caption{Accuracy results across datasets.}
 \label{tab:main}
-\footnotesize
-\setlength{\tabcolsep}{3pt}
-\begin{tabular}{l|c|c}
+\scriptsize
+\setlength{\tabcolsep}{2.2pt}
+\begin{tabular}{l|l|c|c}
 \hline
-\textbf{Method} & \textbf{Last-5 acc.\ (\%)} & \textbf{Final acc.\ (\%)} \\
+\textbf{Dataset} & \textbf{Method} & \textbf{Last-5 acc.\ (\%)} & \textbf{Final acc.\ (\%)} \\
 \hline
-Ours    & \textbf{32.35 $\pm$ 1.47} & \textbf{35.49 $\pm$ 3.88} \\
-FedAvg  & 26.34 $\pm$ 0.59          & 27.62 $\pm$ 1.83 \\
-FedProx & 26.07 $\pm$ 0.91          & 27.13 $\pm$ 2.04 \\
-Oort    & 29.91 $\pm$ 2.39          & 29.84 $\pm$ 3.02 \\
-GCA     & 31.87 $\pm$ 1.19          & 32.21 $\pm$ 3.72 \\
+CIFAR-10 & Ours    & \textbf{32.35 $\pm$ 1.47} & \textbf{35.49 $\pm$ 3.88} \\
+         & FedAvg  & 26.34 $\pm$ 0.59          & 27.62 $\pm$ 1.83 \\
+         & FedProx & 26.07 $\pm$ 0.91          & 27.13 $\pm$ 2.04 \\
+         & Oort    & 29.91 $\pm$ 2.39          & 29.84 $\pm$ 3.02 \\
+         & GCA     & 31.87 $\pm$ 1.19          & 32.21 $\pm$ 3.72 \\
+\hline
+Fashion-MNIST & Ours    & \textbf{82.20 $\pm$ 0.53} & \textbf{83.86 $\pm$ 0.47} \\
+              & FedAvg  & 78.97 $\pm$ 1.06 & 80.13 $\pm$ 1.99 \\
+              & FedProx & 79.03 $\pm$ 0.92 & 80.15 $\pm$ 1.76 \\
+              & Oort    & 79.80 $\pm$ 0.58 & 79.69 $\pm$ 0.34 \\
+              & GCA     & 79.58 $\pm$ 1.65 & 78.04 $\pm$ 6.57 \\
+\hline
+MNIST    & Ours    & 90.92 $\pm$ 1.37 & 92.09 $\pm$ 1.13 \\
+         & FedAvg  & 91.28 $\pm$ 0.83 & 91.33 $\pm$ 1.58 \\
+         & FedProx & 91.22 $\pm$ 0.86 & 91.25 $\pm$ 1.75 \\
+         & Oort    & 89.76 $\pm$ 2.94 & 90.18 $\pm$ 2.79 \\
+         & GCA     & \textbf{92.32 $\pm$ 1.57} & \textbf{93.00 $\pm$ 1.47} \\
 \hline
 \end{tabular}
 \end{table}
 
 Fig.~\ref{fig:baseline_convergence} shows the corresponding accuracy trajectories.
 
-Ours improves the last-5-round accuracy over FedAvg by 6.01 percentage points and over the stronger GCA baseline by 0.48 percentage points. The gain over GCA is not large in last-5 accuracy, but it is larger in final accuracy. Meanwhile, the method still keeps explicit residual-energy feasibility and long-term queue accounting.
+On CIFAR-10, Ours improves the last-5-round accuracy over FedAvg by 6.01 percentage points and over the stronger GCA baseline by 0.48 percentage points. The gain over GCA is not large in last-5 accuracy, but it is larger in final accuracy. On Fashion-MNIST, the proposed scheduler obtains the highest final and last-5-round accuracy, with smaller variance than the random-selection baselines. On MNIST, GCA gives the highest mean accuracy, while the proposed method remains competitive with FedAvg and FedProx and above Oort. This suggests that the Shapley-guided queue scheduler is effective on CIFAR-10 and Fashion-MNIST, while its relative advantage can depend on dataset difficulty and on how informative the loss/channel proxy used by GCA is in a simpler classification task.
 
 Table~\ref{tab:energy_baselines} further compares the three methods that explicitly use the wireless energy model in their scheduling rule. The energy column reports the average energy consumed by a selected client in one participating round. The residual-energy column reports the minimum final residual energy among clients. GCA is the most conservative method in average energy expenditure. Ours spends more energy than GCA but much less than Oort, and it obtains the highest accuracy. This result indicates that the proposed scheduler works as a contribution-aware energy regulator: the virtual queue discourages persistent overuse, but the scheduler can still spend energy on high-contribution clients.
 
@@ -595,7 +610,7 @@ The budget sweep supports using a moderate contribution-estimation budget. Movin
 
 \subsection{Channel-Noise Diagnostic}
 
-The channel-noise component makes the simulations closer to wireless FL settings, where the received aggregate may be affected by natural propagation noise. Related wireless privacy studies show that channel noise can be incorporated into privacy-aware aggregation models when the physical-layer transmission and privacy budget are jointly considered \cite{yan2023otafedavgprivacy}. In this paper, the same equivalent clipped noisy-release condition is applied to all compared schedulers. Therefore, the reported gains mainly come from client scheduling rather than different perturbation levels.
+The channel-noise component makes the simulations closer to wireless FL settings, where the received aggregate may be affected by natural propagation noise. Related wireless privacy studies show that channel noise can be incorporated into privacy-aware aggregation models when the physical-layer transmission and privacy budget are jointly considered \cite{yan2023otafedavgprivacy}. In this paper, all compared schedulers use the same nominal channel-noise multiplier and the same $1/K_t$ scaling rule. The realized layer-wise scale can still vary with the adaptive clipping threshold. This diagnostic is used for noise--utility evaluation and is not claimed as a formal differential-privacy guarantee.
 
 \section{Conclusion}
 \label{sec:conclusion}
@@ -604,7 +619,7 @@ This paper studied client scheduling for synchronous cross-device FL under non-I
 
 We also incorporated a lightweight channel-noise diagnostic motivated by the natural noise introduced during wireless propagation. Uploaded updates are clipped to bound the aggregate perturbation scale. Receiver-side channel uncertainty is modeled as equivalent Gaussian perturbation on the released aggregate. This design provides a common noisy wireless-release condition for evaluating the proposed scheduler and the baselines under the same perturbation scale.
 
-Experiments on CIFAR-10 show that the proposed scheduler improves over random-selection and utility-based baselines in a difficult non-IID regime. Ablation studies indicate that the Shapley signal improves accuracy, while the virtual queue provides the energy-accounting mechanism required by the deployable scheduler. Diagnostic sensitivity experiments further show how performance changes with data heterogeneity and contribution-estimation budget. Overall, the results support the scheduler as a candidate mechanism for balancing contribution, channel opportunity, and energy sustainability in resource-constrained FL.
+Experiments on CIFAR-10 show that the proposed scheduler improves over random-selection and utility-based baselines in a difficult non-IID regime. Additional Fashion-MNIST and MNIST runs further check the behavior of the same scheduler across simpler image-classification datasets. Ablation studies indicate that the Shapley signal improves accuracy, while the virtual queue provides the energy-accounting mechanism required by the deployable scheduler. Diagnostic sensitivity experiments further show how performance changes with data heterogeneity and contribution-estimation budget. Overall, the results support the scheduler as a candidate mechanism for balancing contribution, channel opportunity, and energy sustainability in resource-constrained FL.
 
 Future work will extend the framework to asynchronous FL, richer device heterogeneity, tighter theoretical links between online complementary-contribution estimation and score-based stochastic scheduling, and protocol-level integration of secure aggregation with contribution evaluation.
 

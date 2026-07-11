@@ -85,7 +85,7 @@ def args_parser():
     # Shapley计算参数
     parser.add_argument('--shapley_epsilon', type=float, default=0.01,
                         help='threshold for truncation in GTG-Shapley')
-    parser.add_argument('--shapley_max_iter', type=int, default=5,
+    parser.add_argument('--shapley_max_iter', type=int, default=20,
                         help='sample budget for the Shapley estimator')
     parser.add_argument('--shapley_fast', action='store_true',default=False,
                         help='use fast approximation for Shapley calculation')
@@ -99,17 +99,19 @@ def args_parser():
                         help='pilot samples per stratum for complementary-contribution allocation')
 
     # Shapley值更新参数
-    parser.add_argument('--shapley_update_method', type=str, default='exponential',
+    parser.add_argument('--shapley_update_method', type=str, default='mean',
                         choices=['mean', 'exponential', 'recent'],
                         help='method to update global Shapley values')
     parser.add_argument('--shapley_alpha', type=float, default=0.5,
                         help='exponential smoothing parameter for Shapley values (0-1)')
 
     # 客户端选择参数
-    parser.add_argument('--initial_rounds', type=int, default=10,
-                        help='number of initial rounds for round-robin selection')
+    parser.add_argument('--initial_rounds', type=int, default=None,
+                        help='round-robin warmup rounds; default is ceil(num_users / num_selected)')
     parser.add_argument('--num_selected', type=int, default=5,
                         help='number of clients selected per round')
+    parser.add_argument('--selection_beta', type=float, default=1.0,
+                        help='softmax temperature beta for score-based client selection')
 
     # ============= 新增：能量相关参数 =============
     parser.add_argument('--use_energy', action='store_true', default=False,
@@ -142,7 +144,7 @@ def args_parser():
                         help='Lyapunov control parameter V (trade-off performance vs stability)')
     parser.add_argument('--lyapunov_lr', type=float, default=0.01,
                         help='learning rate for weight updates in Lyapunov optimization')
-    parser.add_argument('--energy_budget', type=float, default=2.0,
+    parser.add_argument('--energy_budget', type=float, default=5.0,
                         help='average energy consumption budget per client per round for Lyapunov optimization')
     parser.add_argument('--disable_queue_penalty', action='store_true', default=False,
                         help='disable the virtual-queue penalty while keeping Lyapunov utility scoring')
@@ -173,13 +175,13 @@ def args_parser():
                         help='central DP clipping scope: global update norm or layer-wise tensor norms')
     parser.add_argument('--dp_clip_percentile', type=float, default=80.0,
                         help='percentile of selected update norms used by adaptive clipping')
-    parser.add_argument('--dp_clip_ema', type=float, default=0.9,
+    parser.add_argument('--dp_clip_ema', type=float, default=0.8,
                         help='EMA factor for adaptive clipping threshold')
     parser.add_argument('--dp_clip_growth', type=float, default=1.2,
                         help='maximum multiplicative growth of adaptive clipping norm per round')
     parser.add_argument('--dp_min_clip_norm', type=float, default=0.05,
                         help='minimum adaptive clipping norm')
-    parser.add_argument('--dp_max_clip_norm', type=float, default=2.0,
+    parser.add_argument('--dp_max_clip_norm', type=float, default=1.0,
                         help='maximum adaptive clipping norm')
     parser.add_argument('--dp_noise_multiplier', type=float, default=1.0,
                         help='Gaussian noise multiplier sigma_dp for DP')
