@@ -38,7 +38,6 @@ def _noniid_dirichlet(dataset, num_users, alpha=0.5, seed=42, dataset_name='data
     """
     rng = np.random.RandomState(seed)
 
-    num_classes = 10
     num_samples = len(dataset)
 
     # 获取标签
@@ -52,6 +51,10 @@ def _noniid_dirichlet(dataset, num_users, alpha=0.5, seed=42, dataset_name='data
             _, label = dataset[i]
             labels.append(label)
         labels = np.array(labels)
+
+    if labels.size == 0:
+        raise ValueError("Cannot build a Dirichlet partition without labels")
+    num_classes = int(np.max(labels)) + 1
 
     # 按类别组织数据
     class_indices = {c: [] for c in range(num_classes)}
@@ -148,9 +151,10 @@ def mnist_noniid_dirichlet(dataset, num_users, alpha=0.5, seed=42):
     return _noniid_dirichlet(dataset, num_users, alpha, seed, dataset_name='MNIST')
 
 
-def cifar_noniid_dirichlet(dataset, num_users, alpha=0.5, seed=42):
-    """Sample non-I.I.D client data from CIFAR10 using Dirichlet distribution"""
-    return _noniid_dirichlet(dataset, num_users, alpha, seed, dataset_name='CIFAR10')
+def cifar_noniid_dirichlet(dataset, num_users, alpha=0.5, seed=42,
+                           dataset_name='CIFAR10'):
+    """Sample non-I.I.D client data from a CIFAR dataset using Dirichlet distribution."""
+    return _noniid_dirichlet(dataset, num_users, alpha, seed, dataset_name=dataset_name)
 
 
 def kl_divergence(p, q):
@@ -302,4 +306,3 @@ def cifar_noniid(dataset, num_users):
         dict_users[i] = set(dict_users[i])
 
     return dict_users
-

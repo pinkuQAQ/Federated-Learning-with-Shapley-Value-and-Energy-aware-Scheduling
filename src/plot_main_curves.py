@@ -19,6 +19,7 @@ METHODS = [
     ('random_FedProx_CDP',             'FedProx',  'C2', '-.'),
     ('oort_Energy_CDP',                'Oort',     'C5', '-.'),
     ('gca_Energy_CDP',                 'GCA',      'C4', (0, (3, 1, 1, 1))),
+    ('fedmsv_CDP',                     'Fed-MSV',  'C6', (0, (5, 1))),
 ]
 
 

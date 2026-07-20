@@ -177,6 +177,15 @@ run_baseline() {
                 --gca_learning_weight 0.5 --gca_channel_weight 0.3 --gca_energy_weight 0.2 \
                 "${ENERGY_ARGS[@]}" "${COMMON_DP[@]}" --dp_channel_noise_multiplier "${CHANNEL_SIGMA}"
             ;;
+        fedmsv)
+            run_training "Fed-MSV: dataset=${dataset}, alpha=${alpha}, seed=${seed}" "${output}" \
+                "${BASE_ARGS[@]}" --seed "${seed}" --no_shapley --selection_method fedmsv \
+                --fedmsv_guided_prefix 4 --fedmsv_epsilon_a 0.01 \
+                --fedmsv_epsilon_b 0.01 --fedmsv_epsilon_c 0.1 \
+                --fedmsv_max_permutations 0 --fedmsv_utility_source validation \
+                --fedmsv_utility_samples 1000 \
+                "${COMMON_DP[@]}" --dp_channel_noise_multiplier "${CHANNEL_SIGMA}"
+            ;;
         *)
             echo "ERROR: unknown baseline ${method}"
             exit 1
@@ -189,7 +198,7 @@ run_core_group() {
         for seed in "${SEEDS[@]}"; do
             run_ours "paper_alignment/${RUN_TAG}/core/main/ours/seed${seed}" cifar "${DIRICHLET_ALPHA}" "${seed}" "${SELECTION_BETA}" "${ENERGY_BUDGET}"
             if [ "${RUN_BASELINES}" = "1" ]; then
-                for method in fedavg fedprox oort gca; do
+                for method in fedavg fedprox oort gca fedmsv; do
                     run_baseline "${method}" "paper_alignment/${RUN_TAG}/core/main/${method}/seed${seed}" cifar "${DIRICHLET_ALPHA}" "${seed}"
                 done
             fi
@@ -242,7 +251,7 @@ run_sensitivity_group() {
             for seed in "${SEEDS[@]}"; do
                 run_ours "paper_alignment/${RUN_TAG}/sensitivity/alpha/alpha${alpha_label}/ours/seed${seed}" cifar "${alpha}" "${seed}" "${SELECTION_BETA}" "${ENERGY_BUDGET}"
                 if [ "${RUN_BASELINES}" = "1" ]; then
-                    for method in fedavg fedprox oort gca; do
+                    for method in fedavg fedprox oort gca fedmsv; do
                         run_baseline "${method}" "paper_alignment/${RUN_TAG}/sensitivity/alpha/alpha${alpha_label}/${method}/seed${seed}" cifar "${alpha}" "${seed}"
                     done
                 fi
@@ -306,7 +315,7 @@ run_cross_group() {
         for seed in "${SEEDS[@]}"; do
             run_ours "paper_alignment/${RUN_TAG}/cross/${dataset}/ours/seed${seed}" "${dataset}" "${DIRICHLET_ALPHA}" "${seed}" "${SELECTION_BETA}" "${ENERGY_BUDGET}"
             if [ "${RUN_BASELINES}" = "1" ]; then
-                for method in fedavg fedprox oort gca; do
+                for method in fedavg fedprox oort gca fedmsv; do
                     run_baseline "${method}" "paper_alignment/${RUN_TAG}/cross/${dataset}/${method}/seed${seed}" "${dataset}" "${DIRICHLET_ALPHA}" "${seed}"
                 done
             fi

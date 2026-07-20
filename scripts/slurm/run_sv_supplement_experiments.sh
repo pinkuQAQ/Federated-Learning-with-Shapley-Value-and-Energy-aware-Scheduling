@@ -130,6 +130,16 @@ if [ "${RUN_MAIN}" = "1" ]; then
             --no_shapley --selection_method gca \
             ${ENERGY_ARGS} ${DP_ARGS} \
             --output_folder ${OUT}
+
+        run_cmd "Fed-MSV: modified-Shapley weighted sampling, seed=${SEED}" "${OUT}" \
+            ${BASE_ARGS} --seed ${SEED} \
+            --no_shapley --selection_method fedmsv \
+            --fedmsv_guided_prefix 4 --fedmsv_epsilon_a 0.01 \
+            --fedmsv_epsilon_b 0.01 --fedmsv_epsilon_c 0.1 \
+            --fedmsv_max_permutations 0 --fedmsv_utility_source validation \
+            --fedmsv_utility_samples 1000 \
+            ${DP_ARGS} \
+            --output_folder ${OUT}
     done
 fi
 

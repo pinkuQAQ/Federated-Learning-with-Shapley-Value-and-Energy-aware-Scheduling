@@ -20,8 +20,20 @@ def get_dataset(args):
     each of those users.
     """
 
-    if args.dataset == 'cifar':
-        data_dir = '../data/cifar/'
+    if args.dataset in ('cifar', 'cifar100'):
+        is_cifar100 = args.dataset == 'cifar100'
+        data_dir = '../data/cifar100/' if is_cifar100 else '../data/cifar/'
+
+        if is_cifar100:
+            dataset_class = datasets.CIFAR100
+            dataset_name = 'CIFAR100'
+            normalize_mean = [0.5071, 0.4867, 0.4408]
+            normalize_std = [0.2675, 0.2565, 0.2761]
+        else:
+            dataset_class = datasets.CIFAR10
+            dataset_name = 'CIFAR10'
+            normalize_mean = [0.4914, 0.4822, 0.4465]
+            normalize_std = [0.2470, 0.2435, 0.2616]
 
         # 训练集transform（加上数据增强）
         transform_train = transforms.Compose([
@@ -29,8 +41,8 @@ def get_dataset(args):
             transforms.RandomHorizontalFlip(),  # 重要：数据增强
             transforms.ToTensor(),
             transforms.Normalize(
-                mean=[0.4914, 0.4822, 0.4465],
-                std=[0.2470, 0.2435, 0.2616]
+                mean=normalize_mean,
+                std=normalize_std
             )
         ])
 
@@ -38,19 +50,19 @@ def get_dataset(args):
         transform_test = transforms.Compose([
             transforms.ToTensor(),
             transforms.Normalize(
-                mean=[0.4914, 0.4822, 0.4465],
-                std=[0.2470, 0.2435, 0.2616]
+                mean=normalize_mean,
+                std=normalize_std
             )
         ])
 
-        train_dataset = datasets.CIFAR10(
+        train_dataset = dataset_class(
             data_dir,
             train=True,
             download=True,
             transform=transform_train  # 使用训练transform
         )
 
-        test_dataset = datasets.CIFAR10(
+        test_dataset = dataset_class(
             data_dir,
             train=False,
             download=True,
@@ -86,12 +98,13 @@ def get_dataset(args):
                 else:
                     seed = 42
 
-                print(f"使用Dirichlet分布划分CIFAR10数据 (alpha={alpha}, seed={seed})")
+                print(f"使用Dirichlet分布划分{dataset_name}数据 (alpha={alpha}, seed={seed})")
                 user_groups = cifar_noniid_dirichlet(
                     train_dataset,
                     args.num_users,
                     alpha=alpha,
-                    seed=seed
+                    seed=seed,
+                    dataset_name=dataset_name
                 )
 
     elif args.dataset == 'mnist' or args.dataset == 'fmnist':

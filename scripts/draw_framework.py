@@ -1,265 +1,344 @@
-"""
-Two-column FL framework diagram
-Left:  Wireless FL Clients (Non-IID Data / Residual Energy / Channel State)
-Right: Server-side Scheduler (4 steps + Round Outputs)
-"""
+"""Draw the paper's Fig. 1 as a publication-ready vector schematic."""
+
+from pathlib import Path
 
 import matplotlib.pyplot as plt
-import matplotlib.patches as mpatches
-from matplotlib.patches import FancyBboxPatch, Circle, Rectangle
-import matplotlib.colors as mcolors
-import numpy as np
+from matplotlib.patches import Circle, FancyArrowPatch, FancyBboxPatch, Rectangle
 
-# ─── colour palette ────────────────────────────────────────────────────────
-C = {
-    'blue':   '#1565C0',
-    'teal':   '#00796B',
-    'green':  '#2E7D32',
-    'orange': '#E65100',
-    'purple': '#6A1B9A',
-    'dark':   '#263238',
-    'gray':   '#546E7A',
-    'lgray':  '#ECEFF1',
-    'sep':    '#B0BEC5',
+
+COLORS = {
+    "ink": "#20262E",
+    "muted": "#596673",
+    "line": "#AAB3BC",
+    "blue": "#1874C9",
+    "blue_light": "#E9F3FC",
+    "red": "#D93B3B",
+    "red_light": "#FCEBEC",
+    "green": "#2C8B57",
+    "green_light": "#EAF5EE",
+    "orange": "#E58B2A",
+    "orange_light": "#FFF2E3",
+    "cyan": "#64B9C3",
+    "gray_light": "#F4F6F8",
+    "gray_node": "#AEB5BC",
 }
 
-# ─── icon helpers ──────────────────────────────────────────────────────────
 
-def noniid_icon(ax, cx, cy, r=0.22):
-    """Scatter-dot pattern representing heterogeneous data."""
-    offsets = [(-0.55, 0.30), (0.05, 0.52), (0.55, 0.18),
-               (-0.38,-0.30), (0.22,-0.42), (0.50,-0.08)]
-    sizes   = [40, 28, 36, 30, 22, 38]
-    colors  = [C['orange'], C['blue']] * 3
-    for (dx, dy), s, c in zip(offsets, sizes, colors):
-        ax.scatter(cx + dx*r, cy + dy*r, s=s, c=c, zorder=6,
-                   edgecolors='none', clip_on=False)
+def rounded_box(ax, x, y, w, h, *, edge, face="white", lw=1.4,
+                radius=0.12, linestyle="-"):
+    patch = FancyBboxPatch(
+        (x, y), w, h,
+        boxstyle=f"round,pad=0.02,rounding_size={radius}",
+        linewidth=lw,
+        edgecolor=edge,
+        facecolor=face,
+        linestyle=linestyle,
+        zorder=1,
+    )
+    ax.add_patch(patch)
+    return patch
 
-def battery_icon(ax, cx, cy, level=0.65, color=None, w=0.56, h=0.28):
-    color = color or C['green']
-    ax.add_patch(Rectangle((cx-w/2, cy-h/2), w, h,
-                            lw=1.8, edgecolor=color, facecolor='white', zorder=5))
-    ax.add_patch(Rectangle((cx+w/2, cy-h/6), w*0.1, h/3,
-                            lw=0, facecolor=color, zorder=5))
-    ax.add_patch(Rectangle((cx-w/2+0.025, cy-h/2+0.035),
-                            max(0, (w-0.05)*level), h-0.07,
-                            lw=0, facecolor=color, alpha=0.85, zorder=6))
 
-def signal_icon(ax, cx, cy, strength=3, color=None, size=0.30):
-    color = color or C['blue']
-    n, bw, sp = 4, size*0.17, size*0.11
-    tw = n*bw + (n-1)*sp
-    x0 = cx - tw/2
-    for i in range(n):
-        bh = size*(0.25 + i*0.25)
-        ax.add_patch(Rectangle((x0 + i*(bw+sp), cy - size*0.5),
-                                bw, bh, lw=0,
-                                facecolor=color,
-                                alpha=1.0 if i < strength else 0.18,
-                                zorder=5))
+def flow_arrow(ax, start, end, *, color, lw=2.0, style="-", mutation=16,
+               zorder=4):
+    arrow = FancyArrowPatch(
+        start,
+        end,
+        arrowstyle="-|>",
+        mutation_scale=mutation,
+        linewidth=lw,
+        linestyle=style,
+        color=color,
+        shrinkA=0,
+        shrinkB=0,
+        zorder=zorder,
+    )
+    ax.add_patch(arrow)
+    return arrow
 
-def status_icon(ax, cx, cy, scheduled=True, r=0.32):
-    color = C['green'] if scheduled else C['gray']
-    ax.add_patch(Circle((cx, cy), r, facecolor=color,
-                         edgecolor='white', lw=1.2, zorder=6))
-    sym = u'✓' if scheduled else u'✗'
-    ax.text(cx, cy, sym, ha='center', va='center',
-            fontsize=22, color='white', fontweight='bold', zorder=7)
 
-def step_box(ax, x, y, w, h, num, title, subtitle, color):
-    bg = mcolors.to_rgba(color, 0.10)
-    ax.add_patch(FancyBboxPatch((x, y), w, h,
-                                 boxstyle='round,pad=0.07', lw=1.8,
-                                 edgecolor=color, facecolor=bg, zorder=3))
-    ax.add_patch(Circle((x+0.28, y+h/2), 0.18,
-                         facecolor=color, edgecolor='white', lw=1.2, zorder=4))
-    ax.text(x+0.28, y+h/2, str(num),
-            ha='center', va='center', fontsize=13,
-            color='white', fontweight='bold', zorder=5)
-    ax.text(x+0.58, y+h/2 + h*0.14, title,
-            ha='left', va='center', fontsize=13,
-            color=color, fontweight='bold', zorder=4)
-    ax.text(x+0.58, y+h/2 - h*0.20, subtitle,
-            ha='left', va='center', fontsize=13, color=C['gray'], zorder=4)
+def server_icon(ax, cx, cy):
+    rounded_box(
+        ax, cx - 0.60, cy - 0.42, 1.20, 0.84,
+        edge=COLORS["blue"], face=COLORS["blue_light"], lw=1.6,
+        radius=0.08,
+    )
+    for yoff in (0.23, 0.0, -0.23):
+        ax.add_patch(Rectangle(
+            (cx - 0.43, cy + yoff - 0.075), 0.86, 0.15,
+            linewidth=0.9, edgecolor=COLORS["blue"], facecolor="white",
+            zorder=3,
+        ))
+        ax.add_patch(Circle(
+            (cx - 0.31, cy + yoff), 0.025,
+            facecolor=COLORS["green"], edgecolor="none", zorder=4,
+        ))
 
-def down_arrow(ax, x, y_top, y_bot, color=C['dark'], lw=1.6):
-    ax.annotate('', xy=(x, y_bot), xytext=(x, y_top),
-                arrowprops=dict(arrowstyle='->', color=color, lw=lw,
-                                mutation_scale=14),
-                zorder=4)
 
-# ─── figure setup ──────────────────────────────────────────────────────────
+def client_icon(ax, cx, cy, selected=True):
+    color = COLORS["green"] if selected else COLORS["gray_node"]
+    ax.add_patch(FancyBboxPatch(
+        (cx - 0.34, cy - 0.30), 0.68, 0.60,
+        boxstyle="round,pad=0.015,rounding_size=0.06",
+        linewidth=1.5, edgecolor=color, facecolor="white", zorder=3,
+    ))
+    ax.add_patch(Rectangle(
+        (cx - 0.25, cy - 0.18), 0.50, 0.34,
+        linewidth=0, facecolor=COLORS["gray_light"], zorder=3,
+    ))
+    ax.add_patch(Circle(
+        (cx, cy - 0.235), 0.025, facecolor=color, edgecolor="none", zorder=4,
+    ))
+    ax.add_patch(Circle(
+        (cx + 0.28, cy + 0.25), 0.13,
+        facecolor=color, edgecolor="white", linewidth=1.0, zorder=5,
+    ))
+    ax.text(
+        cx + 0.28, cy + 0.25, "1" if selected else "0",
+        ha="center", va="center", fontsize=10, fontweight="bold",
+        color="white", zorder=6,
+    )
 
-fig = plt.figure(figsize=(16, 9))
-ax  = fig.add_axes([0, 0, 1, 1])
-ax.set_xlim(-0.35, 16.35)
-ax.set_ylim(-0.2, 9.2)
-ax.axis('off')
-fig.patch.set_facecolor('white')
 
-# ══════════════════════════════════════════════════════════════════
-# LEFT PANEL  —  Wireless FL Clients
-# ══════════════════════════════════════════════════════════════════
-LP_X, LP_Y, LP_W, LP_H = 0.15, 0.25, 6.55, 8.50
+def data_histogram(ax, cx, cy, heights, colors):
+    width = 0.11
+    gap = 0.045
+    total = len(heights) * width + (len(heights) - 1) * gap
+    x0 = cx - total / 2
+    for i, (height, color) in enumerate(zip(heights, colors)):
+        ax.add_patch(Rectangle(
+            (x0 + i * (width + gap), cy), width, height,
+            linewidth=0, facecolor=color, zorder=3,
+        ))
 
-ax.add_patch(FancyBboxPatch((LP_X, LP_Y), LP_W, LP_H,
-                             boxstyle='round,pad=0.18', lw=2.0,
-                             edgecolor=C['dark'], facecolor='white',
-                             linestyle='--', zorder=1))
 
-ax.text(LP_X + LP_W/2, LP_Y + LP_H - 0.32, 'Wireless FL Clients',
-        ha='center', va='center', fontsize=13.5,
-        fontweight='bold', color=C['dark'])
+def battery_icon(ax, x, y, level):
+    edge = COLORS["green"] if level >= 0.45 else COLORS["orange"]
+    ax.add_patch(Rectangle(
+        (x, y), 0.48, 0.21, linewidth=1.1,
+        edgecolor=edge, facecolor="white", zorder=3,
+    ))
+    ax.add_patch(Rectangle(
+        (x + 0.48, y + 0.055), 0.055, 0.10,
+        linewidth=0, facecolor=edge, zorder=3,
+    ))
+    ax.add_patch(Rectangle(
+        (x + 0.035, y + 0.035), 0.40 * level, 0.14,
+        linewidth=0, facecolor=edge, zorder=4,
+    ))
 
-# column header strip
-ax.add_patch(FancyBboxPatch((LP_X+0.12, 6.95), LP_W-0.24, 0.70,
-                             boxstyle='round,pad=0.04', lw=0,
-                             facecolor=C['lgray'], zorder=2))
 
-CX = dict(lbl=1.35, dat=2.80, bat=4.05, sig=5.20, sta=6.18)
+def signal_icon(ax, x, y, strength):
+    for i in range(4):
+        color = COLORS["blue"] if i < strength else "#D9E4EE"
+        ax.add_patch(Rectangle(
+            (x + 0.09 * i, y), 0.055, 0.07 + 0.07 * i,
+            linewidth=0, facecolor=color, zorder=3,
+        ))
 
-for x, txt in [(CX['lbl'], 'Client'),
-               (CX['dat'], 'Non-IID\nData'),
-               (CX['bat'], 'Residual\nEnergy'),
-               (CX['sig'], 'Channel\nState'),
-               (CX['sta'], 'Status')]:
-    ax.text(x, 7.30, txt, ha='center', va='center',
-            fontsize=13, fontweight='bold', color=C['dark'],
-            linespacing=1.25)
 
-ax.plot([LP_X+0.18, LP_X+LP_W-0.18], [6.92, 6.92],
-        '-', color=C['sep'], lw=1.0, zorder=2)
+def state_row(ax, y, symbol, label, color):
+    ax.add_patch(Circle(
+        (11.36, y), 0.11, facecolor=color, edgecolor="white",
+        linewidth=0.8, zorder=3,
+    ))
+    ax.text(11.60, y, symbol, ha="left", va="center", fontsize=13,
+            color=COLORS["ink"])
+    ax.text(13.25, y, label, ha="left", va="center", fontsize=12.5,
+            color=COLORS["muted"])
 
-# client rows  (name, battery_level, signal_strength, scheduled)
-rows = [
-    ('Client 1', 0.80, 3, True),
-    ('Client 2', 0.55, 3, True),
-    ('Client 3', 0.25, 2, False),
+
+plt.rcParams.update({
+    "font.family": "serif",
+    "font.serif": ["Times New Roman", "DejaVu Serif"],
+    "mathtext.fontset": "stix",
+    "axes.unicode_minus": False,
+})
+
+fig = plt.figure(figsize=(16, 7.4), facecolor="white")
+ax = fig.add_axes([0, 0, 1, 1])
+ax.set_xlim(0, 16)
+ax.set_ylim(0, 7.4)
+ax.axis("off")
+
+# Main layer boundaries, following the visual hierarchy of the reference figure.
+rounded_box(
+    ax, 0.35, 0.34, 9.65, 6.72,
+    edge=COLORS["ink"], face="white", lw=1.7, radius=0.55, linestyle="--",
+)
+rounded_box(
+    ax, 10.75, 0.34, 4.90, 6.72,
+    edge=COLORS["ink"], face="white", lw=1.7, radius=0.55, linestyle="--",
+)
+
+ax.text(0.72, 6.70, "Wireless Federated Learning Layer",
+        fontsize=18, fontweight="bold", color=COLORS["ink"], va="center")
+ax.text(11.08, 6.70, "Shapley-Guided Scheduler",
+        fontsize=17, fontweight="bold", color=COLORS["ink"], va="center")
+
+# Server and global model.
+server_x, server_y = 5.15, 5.80
+server_icon(ax, server_x, server_y)
+ax.text(server_x, 6.38, "Parameter Server", ha="center", va="center",
+        fontsize=14.5, fontweight="bold", color=COLORS["ink"])
+ax.text(server_x, 5.22, r"Global model $w_t$", ha="center", va="center",
+        fontsize=13, color=COLORS["muted"])
+
+# Clients and private non-IID data.
+client_x = [1.45, 3.65, 5.85, 8.75]
+client_names = ["Client 1", "Client 2", "Client 3", r"Client $N$"]
+selected = [True, True, False, True]
+levels = [0.82, 0.58, 0.31, 0.70]
+signals = [4, 3, 2, 3]
+histograms = [
+    ([0.22, 0.54, 0.15, 0.42], [COLORS["red"], COLORS["blue"], COLORS["orange"], COLORS["cyan"]]),
+    ([0.48, 0.18, 0.50, 0.13], [COLORS["orange"], COLORS["cyan"], COLORS["blue"], COLORS["red"]]),
+    ([0.12, 0.45, 0.52, 0.20], [COLORS["blue"], COLORS["red"], COLORS["cyan"], COLORS["orange"]]),
+    ([0.37, 0.16, 0.29, 0.55], [COLORS["cyan"], COLORS["orange"], COLORS["red"], COLORS["blue"]]),
 ]
-ROW_Y = [5.90, 4.45, 2.98]
 
-for cy, (name, blv, sig, sched) in zip(ROW_Y, rows):
-    ax.text(CX['lbl'], cy, name, ha='center', va='center',
-            fontsize=13, fontweight='bold', color=C['dark'])
-    noniid_icon(ax, CX['dat'],  cy)
-    battery_icon(ax, CX['bat'], cy, level=blv)
-    signal_icon( ax, CX['sig'], cy, strength=sig)
-    status_icon( ax, CX['sta'], cy, scheduled=sched)
+rounded_box(
+    ax, 0.72, 0.72, 8.92, 1.45,
+    edge="#C7D6D9", face="#F2F8F8", lw=1.0, radius=0.55,
+)
+ax.text(0.92, 1.92, "Private non-IID datasets and device states",
+        fontsize=12.5, fontweight="bold", color=COLORS["muted"], va="center")
 
-# row separators
-for sy in [3.72, 5.18]:
-    ax.plot([LP_X+0.45, LP_X+LP_W-0.45], [sy, sy],
-            '--', color='#CFD8DC', lw=0.8, zorder=2)
+for idx, (cx, name, is_selected) in enumerate(zip(client_x, client_names, selected)):
+    client_icon(ax, cx, 3.34, selected=is_selected)
+    ax.text(cx, 3.91, name, ha="center", va="center", fontsize=13.5,
+            fontweight="bold", color=COLORS["ink"])
 
-# legend
-LEG_Y = 1.55
-ax.text(LP_X+0.35, LEG_Y+0.50, 'Legend:',
-        fontsize=13, fontweight='bold', color=C['dark'])
-status_icon(ax, LP_X+0.58, LEG_Y, scheduled=True,  r=0.16)
-ax.text(LP_X+0.82, LEG_Y, 'Scheduled',
-        fontsize=13, va='center', color=C['dark'])
-status_icon(ax, LP_X+2.30, LEG_Y, scheduled=False, r=0.16)
-ax.text(LP_X+2.54, LEG_Y, 'Unscheduled',
-        fontsize=13, va='center', color=C['dark'])
+    data_histogram(ax, cx - 0.38, 1.06, *histograms[idx])
+    battery_icon(ax, cx - 0.02, 1.08, levels[idx])
+    signal_icon(ax, cx + 0.55, 1.08, signals[idx])
 
-# ══════════════════════════════════════════════════════════════════
-# RIGHT PANEL  —  Server-side Scheduler
-# ══════════════════════════════════════════════════════════════════
-RP_X, RP_Y, RP_W, RP_H = 9.30, 0.25, 6.55, 8.50
+    ax.text(cx, 0.87, r"$D_n$", ha="center", va="center", fontsize=12.5,
+            color=COLORS["muted"])
 
-ax.add_patch(FancyBboxPatch((RP_X, RP_Y), RP_W, RP_H,
-                             boxstyle='round,pad=0.18', lw=2.0,
-                             edgecolor=C['dark'], facecolor='white',
-                             linestyle='--', zorder=1))
+    # Internal FL communication links.
+    flow_arrow(ax, (server_x - 0.12, 5.04), (cx, 3.72),
+               color=COLORS["blue"], lw=1.45, mutation=12, zorder=2)
+    flow_arrow(ax, (cx + 0.10, 3.70), (server_x + 0.16, 5.03),
+               color=COLORS["red"], lw=1.25, style="--", mutation=11, zorder=2)
 
-ax.text(RP_X + RP_W/2, RP_Y + RP_H - 0.32, 'Server-side Scheduler',
-        ha='center', va='center', fontsize=13.5,
-        fontweight='bold', color=C['dark'])
+ax.text(7.22, 4.95, "Global model broadcast", fontsize=12.5,
+        color=COLORS["blue"], fontweight="bold", rotation=-16,
+        ha="center", va="center")
+ax.text(2.95, 4.95, "Clipped local updates", fontsize=12.5,
+        color=COLORS["red"], fontweight="bold", rotation=16,
+        ha="center", va="center")
+ax.text(7.28, 3.35, r"$\cdots$", fontsize=26, color=COLORS["ink"],
+        ha="center", va="center")
 
-# steps
-# SH=0.80, GAP=0.40 → center spacing=1.20
-SW, SH = RP_W - 0.55, 0.80
-STEPS = [
-    (7.20, C['teal'],   'Energy Feasibility Filter',
-                      'Remove energy-insufficient clients'),
-    (6.00, C['blue'],   'Persistent Shapley Estimate',
-                      'Estimate contribution scores'),
-    (4.80, C['purple'], 'Score-based Client Scheduling',
-                      'Select score-biased clients'),
-    (3.60, C['orange'], 'Clipped FedAvg + Channel Noise',
-                      'Aggregate with equivalent perturbation'),
-]
+# Communication legend.
+flow_arrow(ax, (1.03, 0.53), (1.63, 0.53), color=COLORS["blue"],
+           lw=1.5, mutation=10)
+ax.text(1.72, 0.53, "model broadcast", fontsize=11.5,
+        color=COLORS["muted"], va="center")
+flow_arrow(ax, (3.47, 0.53), (4.07, 0.53), color=COLORS["red"],
+           lw=1.35, style="--", mutation=10)
+ax.text(4.16, 0.53, "update upload", fontsize=11.5,
+        color=COLORS["muted"], va="center")
+ax.add_patch(Circle((5.75, 0.53), 0.09, facecolor=COLORS["green"],
+                    edgecolor="none", zorder=3))
+ax.text(5.75, 0.53, "1", fontsize=8.5, color="white", fontweight="bold",
+        ha="center", va="center")
+ax.text(5.91, 0.53, "selected", fontsize=11.5,
+        color=COLORS["muted"], va="center")
+ax.add_patch(Circle((7.13, 0.53), 0.09, facecolor=COLORS["gray_node"],
+                    edgecolor="none", zorder=3))
+ax.text(7.13, 0.53, "0", fontsize=8.5, color="white", fontweight="bold",
+        ha="center", va="center")
+ax.text(7.29, 0.53, "not selected", fontsize=11.5,
+        color=COLORS["muted"], va="center")
 
-for idx, (sy, col, title, sub) in enumerate(STEPS):
-    step_box(ax, RP_X+0.28, sy-SH/2, SW, SH, idx+1, title, sub, col)
-    if idx < len(STEPS)-1:
-        curr_bot  = sy - SH/2
-        next_top  = STEPS[idx+1][0] + SH/2
-        down_arrow(ax, RP_X+RP_W/2, curr_bot-0.04, next_top+0.04)
+# Scheduler state block.
+rounded_box(ax, 11.08, 4.94, 4.20, 1.32,
+            edge=COLORS["line"], face=COLORS["gray_light"], lw=1.1,
+            radius=0.10)
+ax.text(11.32, 6.02, r"Round-$t$ scheduling states", fontsize=13.5,
+        fontweight="bold", color=COLORS["ink"], va="center")
+state_row(ax, 5.69, r"$\varphi_n(t)$", "contribution", COLORS["orange"])
+state_row(ax, 5.37, r"$B_n(t),\ \chi_n(t)$", "battery and channel", COLORS["cyan"])
+state_row(ax, 5.05, r"$Q_n(t)$", "energy pressure", COLORS["red"])
 
-# round outputs box — top = step4_bottom - 0.40, height = 1.60
-OUT_TOP = STEPS[-1][0] - SH/2 - 0.40
-OUT_BOT = OUT_TOP - 2.00
-ax.add_patch(FancyBboxPatch((RP_X+0.22, OUT_BOT), RP_W-0.44, OUT_TOP-OUT_BOT,
-                             boxstyle='round,pad=0.10', lw=1.6,
-                             edgecolor=C['blue'],
-                             facecolor=mcolors.to_rgba(C['blue'], 0.06),
-                             zorder=2))
+flow_arrow(ax, (13.18, 4.91), (13.18, 4.72), color=COLORS["blue"],
+           lw=2.0, mutation=14)
 
-ax.text(RP_X+RP_W/2, OUT_TOP-0.28, 'Round Outputs',
-        ha='center', va='center', fontsize=15,
-        fontweight='bold', color=C['blue'], zorder=3)
+# Feasibility, score, and Softmax sampling.
+rounded_box(ax, 11.08, 3.63, 4.20, 1.05,
+            edge=COLORS["blue"], face=COLORS["blue_light"], lw=1.5,
+            radius=0.11)
+ax.text(13.18, 4.43, "Feasibility filter and score", ha="center", va="center",
+        fontsize=13.5, fontweight="bold", color=COLORS["blue"])
+ax.text(13.18, 4.08,
+        r"$\mathrm{Score}_n(t)=V U_n(t)-Q_n(t)E_n(t)$",
+        ha="center", va="center", fontsize=13.0, color=COLORS["ink"])
+ax.text(13.18, 3.78,
+        r"$p_n(t)\propto\exp(\mathrm{Score}_n(t)/\beta)$",
+        ha="center", va="center", fontsize=13.0, color=COLORS["ink"])
 
-outputs = [
-    (r'$w_{t+1}$',              'Updated Global Model'),
-    (r'$\hat{\varphi}_i(t+1)$', 'Updated Shapley Estimates'),
-    (r'$\mathcal{S}_{t+1}$',    'Next-round Client Set'),
-]
-for j, (fml, lbl) in enumerate(outputs):
-    oy = OUT_TOP - 0.68 - j*0.47
-    ax.add_patch(Circle((RP_X+0.47, oy), 0.09, facecolor=C['blue'], zorder=4))
-    ax.text(RP_X+0.65, oy, f'{fml}  —  {lbl}',
-            ha='left', va='center', fontsize=13, color=C['dark'], zorder=4)
+flow_arrow(ax, (13.18, 3.58), (13.18, 3.28), color=COLORS["blue"],
+           lw=2.0, mutation=14)
 
-# arrow from last step to outputs
-last_bot = STEPS[-1][0] - SH/2
-down_arrow(ax, RP_X+RP_W/2, last_bot-0.04, OUT_TOP+0.04)
+ax.text(13.18, 3.12, "Sample $K$ clients without replacement",
+        ha="center", va="center", fontsize=13.0, fontweight="bold",
+        color=COLORS["ink"])
+node_x = [11.63, 12.38, 13.13, 13.88, 14.63]
+node_selected = [True, False, True, True, False]
+for idx, (nx, keep) in enumerate(zip(node_x, node_selected), start=1):
+    color = COLORS["green"] if keep else COLORS["gray_node"]
+    ax.add_patch(Circle((nx, 2.69), 0.20, facecolor=color,
+                        edgecolor="white", linewidth=1.0, zorder=3))
+    ax.text(nx, 2.69, str(idx) if idx < 5 else r"$N$", fontsize=10.5,
+            color="white", fontweight="bold", ha="center", va="center")
+ax.add_patch(FancyBboxPatch(
+    (11.38, 2.34), 3.60, 0.18,
+    boxstyle="round,pad=0.01,rounding_size=0.06",
+    linewidth=0, facecolor="#E2F1D9", zorder=2,
+))
+ax.text(13.18, 2.43, r"Selection vector $a_n(t)\in\{0,1\}$",
+        fontsize=11.5, color=COLORS["muted"], ha="center", va="center")
 
-# ══════════════════════════════════════════════════════════════════
-# MIDDLE ARROWS
-# ══════════════════════════════════════════════════════════════════
-MX_L = LP_X + LP_W + 0.10
-MX_R = RP_X - 0.10
-MX_C = (MX_L + MX_R) / 2
+flow_arrow(ax, (13.18, 2.30), (13.18, 2.00), color=COLORS["blue"],
+           lw=2.0, mutation=14)
 
-# ── Global Model Broadcast  (server → clients, i.e. pointing LEFT) ──
-GMB_Y = 6.60
-ax.annotate('', xy=(MX_L, GMB_Y), xytext=(MX_R, GMB_Y),
-            arrowprops=dict(arrowstyle='->', color=C['blue'], lw=2.8,
-                            mutation_scale=20),
-            zorder=5)
-ax.text(MX_C, GMB_Y+0.32, 'Global Model\nBroadcast',
-        ha='center', va='bottom', fontsize=13,
-        fontweight='bold', color=C['blue'], linespacing=1.3)
-ax.text(MX_C, GMB_Y-0.22, r'$w_t$',
-        ha='center', va='top', fontsize=13, color=C['blue'])
+# Aggregation and state refresh.
+rounded_box(ax, 11.08, 0.76, 4.20, 1.18,
+            edge=COLORS["orange"], face=COLORS["orange_light"], lw=1.5,
+            radius=0.11)
+ax.text(13.18, 1.70, "Aggregation and state refresh", ha="center", va="center",
+        fontsize=13.5, fontweight="bold", color="#B85F10")
+ax.text(13.18, 1.38, "Clipped FedAvg + equivalent channel noise",
+        ha="center", va="center", fontsize=12.2, color=COLORS["ink"])
+ax.text(13.18, 1.05,
+        r"$w_{t+1},\ \varphi_n(t+1),\ B_n(t+1),\ Q_n(t+1)$",
+        ha="center", va="center", fontsize=12.8, color=COLORS["ink"])
 
-# ── Local Update Upload  (clients → server, i.e. pointing RIGHT) ──
-LUU_Y = 3.00
-ax.annotate('', xy=(MX_R, LUU_Y), xytext=(MX_L, LUU_Y),
-            arrowprops=dict(arrowstyle='->', color=C['teal'], lw=2.8,
-                            mutation_scale=20),
-            zorder=5)
-ax.text(MX_C, LUU_Y+0.32, 'Local Update\nUpload',
-        ha='center', va='bottom', fontsize=13,
-        fontweight='bold', color=C['teal'], linespacing=1.3)
-ax.text(MX_C, LUU_Y-0.22, r'$\Delta w_n$',
-        ha='center', va='top', fontsize=13, color=C['teal'])
+# Cross-layer interaction arrows, as in the reference's physical/logical split.
+flow_arrow(ax, (10.76, 4.87), (9.99, 4.87), color=COLORS["blue"],
+           lw=4.0, mutation=22, zorder=7)
+ax.text(9.88, 5.10, "selected set", ha="right", va="bottom",
+        fontsize=10.5, fontweight="bold", color=COLORS["blue"])
 
-# ─── save ──────────────────────────────────────────────────────────────────
-out_pdf = 'latex/figures/framework_overview.pdf'
-out_png = 'latex/figures/配图_new.png'
-plt.savefig(out_pdf, bbox_inches='tight', dpi=300)
-plt.savefig(out_png, bbox_inches='tight', dpi=200)
-print(f'Saved  {out_pdf}')
-print(f'Saved  {out_png}')
+flow_arrow(ax, (10.00, 2.08), (10.76, 2.08), color=COLORS["red"],
+           lw=4.0, mutation=22, zorder=7)
+ax.text(9.88, 1.83, "clipped updates", ha="right", va="top",
+        fontsize=10.5, fontweight="bold", color=COLORS["red"])
+
+# A restrained loop indicates that updated states are reused in the next round.
+loop = FancyArrowPatch(
+    (15.43, 1.28), (15.43, 5.60),
+    arrowstyle="-|>", mutation_scale=13, linewidth=1.2,
+    linestyle="--", color=COLORS["muted"], zorder=2,
+)
+ax.add_patch(loop)
+ax.text(15.54, 3.42, "next round", rotation=90, fontsize=10.5,
+        color=COLORS["muted"], ha="center", va="center")
+
+output = Path("latex/figures/framework_overview.pdf")
+output.parent.mkdir(parents=True, exist_ok=True)
+fig.savefig(output, bbox_inches="tight", pad_inches=0.03)
+plt.close(fig)
+print(f"Saved {output}")

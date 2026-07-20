@@ -55,7 +55,7 @@ def make_summary_writer(logdir):
 
 from options import args_parser
 from update import LocalUpdate, LocalUpdateFedProx, test_inference, DatasetSplit
-from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar
+from models import MLP, CNNMnist, CNNFashion_Mnist, CNNCifar, LeNet5Cifar
 from utils import get_dataset, average_weights, exp_details
 
 from shapley import MCShapley
@@ -66,6 +66,15 @@ from selection import (hybrid_selection, random_selection, round_robin_selection
                        gradient_channel_aware_selection)
 from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
+from fedmsv import (
+    FedMSVSelector,
+    LabelOverrideDataset,
+    ModelAccuracyUtility,
+    add_gaussian_model_noise,
+    build_label_overrides,
+    choose_low_quality_clients,
+    random_free_rider_state,
+)
 
 # 训练/验证/测试数据划分比例（每个客户端的本地数据中，前80%训练，中间10%验证，后10%测试）
 TRAIN_SPLIT_RATIO = 0.8
@@ -80,7 +89,7 @@ def build_model(args, train_dataset):
         elif args.dataset == 'fmnist':
             model = CNNFashion_Mnist(args=args)
             model_class = CNNFashion_Mnist
-        elif args.dataset == 'cifar':
+        elif args.dataset in ('cifar', 'cifar100'):
             model = CNNCifar(args=args)
             model_class = CNNCifar
         else:
@@ -92,10 +101,43 @@ def build_model(args, train_dataset):
             len_in *= x
         model = MLP(dim_in=len_in, dim_hidden=64, dim_out=args.num_classes)
         model_class = MLP
+    elif args.model == 'lenet5' and args.dataset == 'cifar':
+        model = LeNet5Cifar(args=args)
+        model_class = LeNet5Cifar
     else:
         exit('Error: unrecognized model')
 
     return model, model_class
+
+
+def build_fedmsv_utility_loader(args, train_dataset, test_dataset, user_groups):
+    """Build the utility loader for either fair-baseline or paper mode."""
+    max_samples = max(int(getattr(args, 'fedmsv_utility_samples', 1000)), 0)
+    if args.fedmsv_utility_source == 'test':
+        source = test_dataset
+        source_size = len(source)
+        if max_samples and source_size > max_samples:
+            rng = np.random.RandomState(9999)
+            indices = rng.choice(source_size, max_samples, replace=False).tolist()
+            source = torch.utils.data.Subset(source, indices)
+        sample_size = len(source)
+    else:
+        validation_indices = []
+        for client_id in range(args.num_users):
+            client_indices = list(user_groups[client_id])
+            val_start = int(TRAIN_SPLIT_RATIO * len(client_indices))
+            val_end = int(0.9 * len(client_indices))
+            validation_indices.extend(client_indices[val_start:val_end])
+        rng = np.random.RandomState(42)
+        if max_samples and len(validation_indices) > max_samples:
+            validation_indices = rng.choice(
+                validation_indices, max_samples, replace=False
+            ).tolist()
+        source = torch.utils.data.Subset(train_dataset, validation_indices)
+        sample_size = len(validation_indices)
+
+    batch_size = min(128, max(sample_size, 1))
+    return DataLoader(source, batch_size=batch_size, shuffle=False), sample_size
 
 
 def evaluate_poc_candidates(args, global_model, train_dataset, user_groups,
@@ -554,7 +596,8 @@ def select_clients(args, epoch, num_selected, initial_rounds,
                    energy_scores, available_clients,
                    energy_manager, lyapunov_optimizer,
                    client_local_losses, user_groups=None,
-                   ucb_rewards=None, ucb_counts=None, oort_selector=None):
+                   ucb_rewards=None, ucb_counts=None, oort_selector=None,
+                   fedmsv_selector=None):
     """统一的客户端选择逻辑"""
     if shapley_values is not None:
         np.nan_to_num(shapley_values, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
@@ -589,6 +632,11 @@ def select_clients(args, epoch, num_selected, initial_rounds,
             if oort_selector is None:
                 return np.random.choice(pool, min(num_selected, len(pool)), replace=False).tolist()
             return oort_selector.select(available_clients=pool)
+        if args.selection_method == 'fedmsv':
+            pool = available_clients if available_clients is not None else list(range(args.num_users))
+            if fedmsv_selector is None:
+                return np.random.choice(pool, min(num_selected, len(pool)), replace=False).tolist()
+            return fedmsv_selector.select(available_clients=pool)
         if args.selection_method == 'gca':
             client_data_sizes = _get_client_data_sizes(user_groups, args.num_users) if user_groups is not None else None
             if energy_manager is not None and energy_manager.channel_gains is not None:
@@ -873,9 +921,10 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                  test_accuracies, test_acc, shapley_values, client_participation_counts,
                  client_last_round, shapley_observation_counts,
                  energy_manager, lyapunov_optimizer,
-                 start_time, sv_sample_size=0, ucb_rewards=None, ucb_counts=None,
-                 dp_round_history=None, shapley_time_history=None,
-                 oort_selector=None):
+                  start_time, sv_sample_size=0, ucb_rewards=None, ucb_counts=None,
+                  dp_round_history=None, shapley_time_history=None,
+                  oort_selector=None, fedmsv_selector=None,
+                  fedmsv_low_quality_clients=None):
     """保存实验结果"""
     os.makedirs(exp_folder, exist_ok=True)
     privacy_mode = getattr(args, 'privacy_mode', 'none')
@@ -964,6 +1013,17 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         save_data.update({
             'oort_state': oort_selector.get_state(),
             'client_participation_counts': oort_selector.participation_counts.copy(),
+        })
+
+    if args.selection_method == 'fedmsv' and fedmsv_selector is not None:
+        fedmsv_state = fedmsv_selector.get_state()
+        save_data.update({
+            'fedmsv_state': fedmsv_state,
+            'fedmsv_history': fedmsv_state['history'],
+            'fedmsv_values': fedmsv_state['cumulative_msv'],
+            'fedmsv_sampling_weights': fedmsv_state['normalized_sampling_weights'],
+            'client_participation_counts': fedmsv_state['participation_counts'],
+            'fedmsv_low_quality_clients': list(fedmsv_low_quality_clients or []),
         })
 
     if privacy_mode == 'central':
@@ -1056,6 +1116,15 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 f.write(f"- Oort cutoff utility ratio: {args.oort_cutoff_util}\n")
                 f.write(f"- Oort clip percentile: {args.oort_clip_percentile}\n")
                 f.write(f"- Oort blacklist rounds: {args.oort_blacklist_rounds}\n")
+            if args.selection_method == 'fedmsv':
+                f.write(f"- Fed-MSV guided prefix m: {args.fedmsv_guided_prefix}\n")
+                f.write(f"- Fed-MSV epsilon_a/b/c: {args.fedmsv_epsilon_a}/{args.fedmsv_epsilon_b}/{args.fedmsv_epsilon_c}\n")
+                f.write(f"- Fed-MSV max permutations: {args.fedmsv_max_permutations} (0 = paper enumeration)\n")
+                f.write(f"- Fed-MSV utility source: {args.fedmsv_utility_source}\n")
+                f.write(f"- Fed-MSV utility sample cap: {args.fedmsv_utility_samples}\n")
+                f.write(f"- Fed-MSV low-quality scenario: {args.fedmsv_low_quality_type}\n")
+                f.write(f"- Fed-MSV low-quality fraction: {args.fedmsv_low_quality_fraction}\n")
+                f.write(f"- Fed-MSV low-quality clients: {list(fedmsv_low_quality_clients or [])}\n")
             if args.use_fedprox:
                 f.write(f"- FedProx proximal term: enabled\n")
                 f.write(f"- FedProx mu: {args.fedprox_mu}\n")
@@ -1100,6 +1169,9 @@ if __name__ == '__main__':
     logger = make_summary_writer('../logs')
 
     args = args_parser()
+    if args.selection_method == 'fedmsv' and args.use_shapley:
+        print("[Fed-MSV] Disabling the repository's separate Shapley scheduler; Fed-MSV maintains its own MSV state.")
+        args.use_shapley = False
     exp_details(args)
 
     # Fix 5: 全局可复现性种子
@@ -1198,7 +1270,7 @@ if __name__ == '__main__':
         shapley_values = None
         client_participation_counts = (
             np.zeros(args.num_users)
-            if args.selection_method == 'oort'
+            if args.selection_method in ('oort', 'fedmsv')
             else None
         )
         client_last_round = None
@@ -1217,6 +1289,56 @@ if __name__ == '__main__':
         print("=" * 60 + "\n")
     else:
         oort_selector = None
+
+    training_dataset = train_dataset
+    fedmsv_low_quality_clients = []
+    fedmsv_low_quality_set = set()
+    if args.selection_method == 'fedmsv' and not args.use_shapley:
+        fedmsv_selector = FedMSVSelector(
+            num_clients=args.num_users,
+            sample_size=num_selected,
+            guided_prefix=args.fedmsv_guided_prefix,
+            epsilon_a=args.fedmsv_epsilon_a,
+            epsilon_b=args.fedmsv_epsilon_b,
+            epsilon_c=args.fedmsv_epsilon_c,
+            max_permutations=args.fedmsv_max_permutations,
+            seed=args.seed,
+        )
+        client_participation_counts = fedmsv_selector.participation_counts
+        fedmsv_loader, fedmsv_sample_size = build_fedmsv_utility_loader(
+            args, train_dataset, test_dataset, user_groups
+        )
+        fedmsv_utility = ModelAccuracyUtility(global_model, fedmsv_loader, device)
+        fedmsv_low_quality_clients = choose_low_quality_clients(
+            args.num_users, args.fedmsv_low_quality_fraction, args.seed + 1701
+        )
+        fedmsv_low_quality_set = set(fedmsv_low_quality_clients)
+        if args.fedmsv_low_quality_type == 'label_flip' and fedmsv_low_quality_clients:
+            label_overrides = build_label_overrides(
+                train_dataset,
+                user_groups,
+                fedmsv_low_quality_clients,
+                args.fedmsv_label_flip_fraction,
+                args.num_classes,
+                args.seed + 1702,
+            )
+            training_dataset = LabelOverrideDataset(train_dataset, label_overrides)
+
+        print("\n" + "=" * 60)
+        print("启用 Fed-MSV 客户端选择 (Algorithm 2)")
+        print(f"m={args.fedmsv_guided_prefix}, epsilon_a={args.fedmsv_epsilon_a}, "
+              f"epsilon_b={args.fedmsv_epsilon_b}, epsilon_c={args.fedmsv_epsilon_c}")
+        print(f"排列上限: {args.fedmsv_max_permutations} (0 表示枚举 K!/(K-m)!)")
+        print(f"效用数据: {args.fedmsv_utility_source}, 样本数: {fedmsv_sample_size}")
+        if args.fedmsv_utility_source == 'test':
+            print("[Fed-MSV] 论文复现模式使用测试集效用；该模式不用于公平主表比较。")
+        print(f"低质量客户端场景: {args.fedmsv_low_quality_type}, "
+              f"客户端数: {len(fedmsv_low_quality_clients)}")
+        print("=" * 60 + "\n")
+    else:
+        fedmsv_selector = None
+        fedmsv_utility = None
+        fedmsv_sample_size = 0
 
     # ============= 能量管理器初始化 =============
     if args.use_energy:
@@ -1358,6 +1480,7 @@ if __name__ == '__main__':
             client_local_losses, user_groups=user_groups,
             ucb_rewards=ucb_rewards, ucb_counts=ucb_counts,
             oort_selector=oort_selector,
+            fedmsv_selector=fedmsv_selector,
         )
         if available_clients is None:
             selection_candidates = trainable_clients
@@ -1371,6 +1494,8 @@ if __name__ == '__main__':
             idxs_users, selection_candidates, target_selection_count,
             client_participation_counts if client_participation_counts is not None else None
         )
+        if fedmsv_selector is not None:
+            fedmsv_selector.record_selection(idxs_users)
 
         if args.use_shapley and args.verbose and epoch % print_every == 0:
             print(f"选择的客户端: {sorted(idxs_users)}")
@@ -1378,7 +1503,7 @@ if __name__ == '__main__':
                   f"最小={np.min(client_participation_counts)}, 最大={np.max(client_participation_counts)}")
 
         # 保存当前全局模型（用于Shapley计算）
-        if args.use_shapley:
+        if args.use_shapley or fedmsv_selector is not None:
             previous_global_model = copy.deepcopy(global_model.state_dict())
             current_round_models = {}
 
@@ -1392,16 +1517,32 @@ if __name__ == '__main__':
             elif args.selection_method == 'gca' and client_participation_counts is not None:
                 client_participation_counts[idx] += 1
 
-            if args.use_fedprox:
-                local_model = LocalUpdateFedProx(args=args, dataset=train_dataset,
-                                                 idxs=user_groups[idx], logger=logger,
-                                                 device=device, mu=args.fedprox_mu)
-            else:
-                local_model = LocalUpdate(args=args, dataset=train_dataset,
-                                          idxs=user_groups[idx], logger=logger, device=device)
             local_start_time = time.time()
-            w, loss, actual_samples = local_model.update_weights(
-                model=copy.deepcopy(global_model), global_round=epoch)
+            is_low_quality = int(idx) in fedmsv_low_quality_set
+            corruption_seed = int(args.seed) * 1000003 + int(epoch) * 1009 + int(idx)
+            if (fedmsv_selector is not None and is_low_quality and
+                    args.fedmsv_low_quality_type == 'free_rider'):
+                w = random_free_rider_state(
+                    global_model.state_dict(), args.fedmsv_free_rider_std, corruption_seed
+                )
+                loss = 0.0
+                actual_samples = 0
+                local_model = None
+            else:
+                if args.use_fedprox:
+                    local_model = LocalUpdateFedProx(args=args, dataset=training_dataset,
+                                                     idxs=user_groups[idx], logger=logger,
+                                                     device=device, mu=args.fedprox_mu)
+                else:
+                    local_model = LocalUpdate(args=args, dataset=training_dataset,
+                                              idxs=user_groups[idx], logger=logger, device=device)
+                w, loss, actual_samples = local_model.update_weights(
+                    model=copy.deepcopy(global_model), global_round=epoch)
+                if (fedmsv_selector is not None and is_low_quality and
+                        args.fedmsv_low_quality_type == 'gaussian_noise'):
+                    w = add_gaussian_model_noise(
+                        w, args.fedmsv_noise_variance, corruption_seed
+                    )
             local_duration = time.time() - local_start_time
 
             if args.selection_method == 'oort' and oort_selector is not None:
@@ -1427,7 +1568,7 @@ if __name__ == '__main__':
             # 只做一次deepcopy，共享引用以减少内存开销
             w_copy = copy.deepcopy(w)
             local_weights.append(w_copy)
-            if args.use_shapley:
+            if args.use_shapley or fedmsv_selector is not None:
                 current_round_models[idx] = w_copy
 
             local_losses.append(copy.deepcopy(loss))
@@ -1457,7 +1598,7 @@ if __name__ == '__main__':
 
                 w_copy = copy.deepcopy(w)
                 local_weights.append(w_copy)
-                if args.use_shapley:
+                if args.use_shapley or fedmsv_selector is not None:
                     current_round_models[idx] = w_copy
 
                 local_losses.append(copy.deepcopy(loss))
@@ -1522,6 +1663,27 @@ if __name__ == '__main__':
         global_weights = average_weights(local_weights, client_data_sizes)
         if args.use_shapley:
             round_client_models[epoch]['current_global'] = copy.deepcopy(global_weights)
+        if fedmsv_selector is not None:
+            fedmsv_sizes = {
+                int(client_id): int(data_size)
+                for client_id, data_size in zip(idxs_users, client_data_sizes)
+            }
+            fedmsv_record = fedmsv_selector.update_from_round(
+                selected_clients=idxs_users,
+                previous_global=previous_global_model,
+                current_global=global_weights,
+                client_models=current_round_models,
+                client_data_sizes=fedmsv_sizes,
+                utility_fn=fedmsv_utility,
+                round_index=epoch,
+            )
+            client_participation_counts = fedmsv_selector.participation_counts
+            if args.verbose and fedmsv_record:
+                selected_msv = fedmsv_record['round_msv'][list(idxs_users)]
+                print(f"  [Fed-MSV] skipped={fedmsv_record['round_skipped']}, "
+                      f"permutations={fedmsv_record['permutation_count']}, "
+                      f"evaluations={fedmsv_record['utility_evaluations']}, "
+                      f"MSV=[{selected_msv.min():.3f}, {selected_msv.max():.3f}]")
 
         total_selected_data = max(sum(client_data_sizes), 1)
         aggregation_max_weight = max(client_data_sizes) / total_selected_data
@@ -1589,7 +1751,7 @@ if __name__ == '__main__':
         list_acc, list_loss = [], []
         global_model.eval()
         for c in idxs_users:
-            local_model = LocalUpdate(args=args, dataset=train_dataset,
+            local_model = LocalUpdate(args=args, dataset=training_dataset,
                                       idxs=user_groups[c], logger=logger, device=device)
             acc, loss = local_model.inference(model=global_model)
             list_acc.append(acc)
@@ -1708,6 +1870,8 @@ if __name__ == '__main__':
         dp_round_history=dp_round_history,
         shapley_time_history=shapley_time_history if args.use_shapley else None,
         oort_selector=oort_selector,
+        fedmsv_selector=fedmsv_selector,
+        fedmsv_low_quality_clients=fedmsv_low_quality_clients,
     )
 
     print('\n Total Run Time: {0:0.4f} seconds'.format(time.time() - start_time))
@@ -1730,7 +1894,13 @@ if __name__ == '__main__':
             print(f"Shapley值范围: [{np.min(shapley_values[shapley_values != 0]):.6f}, "
                   f"{np.max(shapley_values):.6f}]")
     else:
-        print(f"客户端选择方法: 随机")
+        print(f"客户端选择方法: {args.selection_method}")
+        if fedmsv_selector is not None:
+            fedmsv_state = fedmsv_selector.get_state()
+            print(f"Fed-MSV 累计值范围: [{fedmsv_state['cumulative_msv'].min():.3f}, "
+                  f"{fedmsv_state['cumulative_msv'].max():.3f}]")
+            print(f"Fed-MSV 效用评估总数: "
+                  f"{sum(item['utility_evaluations'] for item in fedmsv_state['history'])}")
 
     if args.use_energy and energy_manager is not None:
         print(f"\n能量管理统计:")

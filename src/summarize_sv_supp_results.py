@@ -25,6 +25,7 @@ MAIN_ORDER = [
     ("random_FedProx_CDP", "FedProx"),
     ("oort_Energy_CDP", "Oort"),
     ("gca_Energy_CDP", "GCA"),
+    ("fedmsv_CDP", "Fed-MSV"),
 ]
 
 ABLATION_ORDER = [

@@ -30,7 +30,9 @@ def args_parser():
     parser.add_argument('--num_channels', type=int, default=1, help="number of channels of imges")
     parser.add_argument('--num_classes', type=int, default=10, help="number of classes")
     # 数据集参数
-    parser.add_argument('--dataset', type=str, default='cifar', help="name of dataset")
+    parser.add_argument('--dataset', type=str, default='cifar',
+                        choices=['cifar', 'cifar100', 'mnist', 'fmnist'],
+                        help="name of dataset")
     parser.add_argument('--iid', action='store_true',default=False, help='whether i.i.d or not')
     parser.add_argument('--unequal', action='store_true',
                         help='whether to use unequal data splits for non-i.i.d setting (use with --iid False)')
@@ -51,7 +53,7 @@ def args_parser():
     parser.add_argument('--no_shapley', action='store_false', default=True, dest='use_shapley',
                         help='disable Shapley-based client selection (default: use Shapley)')
     parser.add_argument('--selection_method', type=str, default='hybrid',
-                        choices=['random', 'round_robin', 'greedy', 'hybrid', 'poc', 'ucb', 'oort', 'gca'],
+                        choices=['random', 'round_robin', 'greedy', 'hybrid', 'poc', 'ucb', 'oort', 'gca', 'fedmsv'],
                         help='client selection method')
     parser.add_argument('--poc_candidate_size', type=int, default=None,
                         help='Power of Choice candidate pool size (d), default: num_selected * 2')
@@ -81,6 +83,34 @@ def args_parser():
                         help='GCA-inspired weight for channel quality')
     parser.add_argument('--gca_energy_weight', type=float, default=0.2,
                         help='GCA-inspired penalty weight for estimated transmission energy')
+
+    # Fed-MSV parameters from Wu et al. (ESWA 2026).
+    parser.add_argument('--fedmsv_guided_prefix', type=int, default=4,
+                        help='Fed-MSV guided-permutation prefix length m')
+    parser.add_argument('--fedmsv_epsilon_a', type=float, default=0.01,
+                        help='Fed-MSV round-truncation threshold epsilon_a')
+    parser.add_argument('--fedmsv_epsilon_b', type=float, default=0.01,
+                        help='Fed-MSV sequence-truncation threshold epsilon_b')
+    parser.add_argument('--fedmsv_epsilon_c', type=float, default=0.1,
+                        help='Fed-MSV sampling-weight decay parameter epsilon_c')
+    parser.add_argument('--fedmsv_max_permutations', type=int, default=0,
+                        help='maximum guided permutations per round; 0 enumerates K!/(K-m)! as Algorithm 2')
+    parser.add_argument('--fedmsv_utility_source', type=str, default='validation',
+                        choices=['validation', 'test'],
+                        help='Fed-MSV utility data: validation is fair; test follows the paper')
+    parser.add_argument('--fedmsv_utility_samples', type=int, default=1000,
+                        help='maximum Fed-MSV utility samples; 0 uses the full source dataset')
+    parser.add_argument('--fedmsv_low_quality_type', type=str, default='none',
+                        choices=['none', 'free_rider', 'gaussian_noise', 'label_flip'],
+                        help='Fed-MSV paper low-quality-client scenario')
+    parser.add_argument('--fedmsv_low_quality_fraction', type=float, default=0.0,
+                        help='fraction of clients assigned the low-quality behavior')
+    parser.add_argument('--fedmsv_free_rider_std', type=float, default=0.01,
+                        help='standard deviation of randomized free-rider model parameters')
+    parser.add_argument('--fedmsv_noise_variance', type=float, default=0.05,
+                        help='variance of Gaussian noise added to uploaded model parameters')
+    parser.add_argument('--fedmsv_label_flip_fraction', type=float, default=0.5,
+                        help='fraction of each erroneous-label client dataset to flip')
 
     # Shapley计算参数
     parser.add_argument('--shapley_epsilon', type=float, default=0.01,
@@ -215,6 +245,15 @@ def args_parser():
     # ================================================
 
     args = parser.parse_args()
+    if args.dataset == 'cifar100':
+        args.num_classes = 100
+        args.num_channels = 3
+    elif args.dataset == 'cifar':
+        args.num_classes = 10
+        args.num_channels = 3
+    else:
+        args.num_classes = 10
+        args.num_channels = 1
     if args.dp_advanced:
         args.privacy_mode = 'central'
         args.dp_adaptive_clip = True
