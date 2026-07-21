@@ -597,7 +597,7 @@ def select_clients(args, epoch, num_selected, initial_rounds,
                    energy_manager, lyapunov_optimizer,
                    client_local_losses, user_groups=None,
                    ucb_rewards=None, ucb_counts=None, oort_selector=None,
-                   fedmsv_selector=None):
+                   fedmsv_selector=None, gca_dsi_signals=None):
     """统一的客户端选择逻辑"""
     if shapley_values is not None:
         np.nan_to_num(shapley_values, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
@@ -641,23 +641,38 @@ def select_clients(args, epoch, num_selected, initial_rounds,
             client_data_sizes = _get_client_data_sizes(user_groups, args.num_users) if user_groups is not None else None
             if energy_manager is not None and energy_manager.channel_gains is not None:
                 channel_gains = energy_manager.channel_gains
-                per_round_energy = energy_manager.compute_energy_consumption(
-                    channel_gains,
-                    selected_clients=None,
-                    client_data_sizes=client_data_sizes,
-                )
+                if getattr(args, 'gca_mode', 'paper') == 'paper':
+                    # Equation (5) in the source paper. Do not use the common
+                    # simulator's numerical cap or compute-energy extension in
+                    # the GCA ranking indicator.
+                    per_round_energy = (
+                        float(energy_manager.sigma_sq)
+                        / (np.square(np.abs(channel_gains)) + 1e-10)
+                    )
+                else:
+                    per_round_energy = energy_manager.compute_energy_consumption(
+                        channel_gains,
+                        selected_clients=None,
+                        client_data_sizes=client_data_sizes,
+                    )
             else:
                 channel_gains = np.ones(args.num_users, dtype=np.float64)
                 per_round_energy = np.ones(args.num_users, dtype=np.float64)
             pool = available_clients if available_clients is not None else list(range(args.num_users))
             return gradient_channel_aware_selection(
-                learning_signals=client_local_losses,
+                learning_signals=(gca_dsi_signals
+                                  if gca_dsi_signals is not None
+                                  else client_local_losses),
                 channel_gains=channel_gains,
                 energy_costs=per_round_energy,
                 num_selected=num_selected,
                 learning_weight=args.gca_learning_weight,
                 channel_weight=args.gca_channel_weight,
                 energy_weight=args.gca_energy_weight,
+                mode=getattr(args, 'gca_mode', 'paper'),
+                rho_dsi=getattr(args, 'gca_rho_dsi', 0.5),
+                rho_csi=getattr(args, 'gca_rho_csi', 0.5),
+                lambda_energy=getattr(args, 'gca_lambda_energy', 0.5),
                 available_clients=pool,
             )
         if args.use_energy and available_clients and len(available_clients) >= num_selected:
@@ -1418,6 +1433,11 @@ if __name__ == '__main__':
 
     # 记录每个客户端的本地损失
     client_local_losses = np.ones(args.num_users)
+    # GCA's source DSI is the squared local-update norm. Since the current
+    # digital-FL protocol selects clients before local training, retain the
+    # latest observed norm as a stale, source-aligned proxy for unselected
+    # clients.
+    gca_dsi_signals = np.ones(args.num_users, dtype=np.float64)
 
     # Training
     train_loss, train_accuracy = [], []
@@ -1481,6 +1501,7 @@ if __name__ == '__main__':
             ucb_rewards=ucb_rewards, ucb_counts=ucb_counts,
             oort_selector=oort_selector,
             fedmsv_selector=fedmsv_selector,
+            gca_dsi_signals=gca_dsi_signals,
         )
         if available_clients is None:
             selection_candidates = trainable_clients
@@ -1565,6 +1586,12 @@ if __name__ == '__main__':
                     'noise_std': 0.0,
                 }
 
+            if args.selection_method == 'gca':
+                gca_dsi_signals[idx] = max(
+                    _client_update_norm(global_weights, w, args) ** 2,
+                    0.0,
+                )
+
             # 只做一次deepcopy，共享引用以减少内存开销
             w_copy = copy.deepcopy(w)
             local_weights.append(w_copy)
@@ -1591,6 +1618,8 @@ if __name__ == '__main__':
                 args._current_dp_clip_norm = adaptive_clip_norm
 
             for pos, ((idx, raw_w, loss), update_norm) in enumerate(zip(raw_client_records, update_norms)):
+                if args.selection_method == 'gca':
+                    gca_dsi_signals[idx] = max(float(update_norm) ** 2, 0.0)
                 if layer_mode:
                     w, dp_stats = _clip_client_update_layerwise(global_weights, raw_w, adaptive_layer_clip_norms, args)
                 else:

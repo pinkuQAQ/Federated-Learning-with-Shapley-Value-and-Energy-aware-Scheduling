@@ -78,11 +78,21 @@ def args_parser():
     parser.add_argument('--oort_blacklist_rounds', type=int, default=0,
                         help='Oort blacklist cooldown after repeated exploitation; 0 disables')
     parser.add_argument('--gca_learning_weight', type=float, default=0.5,
-                        help='GCA-inspired weight for stale learning-importance signal')
+                        help='Legacy GCA adaptation weight for stale learning-importance signal')
     parser.add_argument('--gca_channel_weight', type=float, default=0.3,
-                        help='GCA-inspired weight for channel quality')
+                        help='Legacy GCA adaptation weight for channel quality')
     parser.add_argument('--gca_energy_weight', type=float, default=0.2,
-                        help='GCA-inspired penalty weight for estimated transmission energy')
+                        help='Legacy GCA adaptation penalty weight for estimated transmission energy')
+    parser.add_argument('--gca_mode', type=str, default='paper',
+                        choices=['paper', 'legacy'],
+                        help='GCA scoring mode: paper uses the hierarchical source formulation; '
+                             'legacy uses the former direct 0.5/0.3/0.2 adaptation')
+    parser.add_argument('--gca_rho_dsi', type=float, default=0.5,
+                        help='GCA paper rho_1 weight for DSI in V_n,t')
+    parser.add_argument('--gca_rho_csi', type=float, default=0.5,
+                        help='GCA paper rho_2 weight for CSI in V_n,t')
+    parser.add_argument('--gca_lambda_energy', type=float, default=0.5,
+                        help='GCA paper lambda_E; lambda_V is 1-lambda_E')
 
     # Fed-MSV parameters from Wu et al. (ESWA 2026).
     parser.add_argument('--fedmsv_guided_prefix', type=int, default=4,

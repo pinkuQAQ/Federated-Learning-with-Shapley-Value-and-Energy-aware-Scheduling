@@ -58,7 +58,7 @@ DP_ARGS="--privacy_mode central --dp_clip_norm ${DP_CLIP_NORM} ${COMMON_DP_ARGS}
 
 BASE_ARGS="--dataset ${DATASET} --model ${MODEL} --epochs ${EPOCHS} --num_users ${NUM_USERS} --num_selected ${NUM_SELECTED} --local_ep ${LOCAL_EP} --local_bs ${LOCAL_BS} --lr ${LR} --test_size ${TEST_SIZE} --gpu ${GPU_ID}"
 ENERGY_ARGS="--use_energy --sigma_squared 1.0 --initial_energy 500.0 --energy_threshold 50.0"
-GCA_ARGS="--no_shapley --selection_method gca --gca_learning_weight 0.5 --gca_channel_weight 0.3 --gca_energy_weight 0.2"
+GCA_ARGS="--no_shapley --selection_method gca --gca_mode paper --gca_rho_dsi 0.5 --gca_rho_csi 0.5 --gca_lambda_energy 0.5"
 
 echo ""
 echo "Configuration"

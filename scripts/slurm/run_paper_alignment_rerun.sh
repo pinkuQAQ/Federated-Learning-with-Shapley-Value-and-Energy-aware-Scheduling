@@ -174,7 +174,7 @@ run_baseline() {
         gca)
             run_training "GCA: dataset=${dataset}, alpha=${alpha}, seed=${seed}" "${output}" \
                 "${BASE_ARGS[@]}" --seed "${seed}" --no_shapley --selection_method gca \
-                --gca_learning_weight 0.5 --gca_channel_weight 0.3 --gca_energy_weight 0.2 \
+                --gca_mode paper --gca_rho_dsi 0.5 --gca_rho_csi 0.5 --gca_lambda_energy 0.5 \
                 "${ENERGY_ARGS[@]}" "${COMMON_DP[@]}" --dp_channel_noise_multiplier "${CHANNEL_SIGMA}"
             ;;
         fedmsv)

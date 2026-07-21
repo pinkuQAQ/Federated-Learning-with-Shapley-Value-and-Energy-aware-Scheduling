@@ -49,6 +49,8 @@ def main():
     parser.add_argument('--tag', default=None, help='Run tag under save/main/. Defaults to latest.')
     parser.add_argument('--root', default=None,
                         help='Optional main-result root, e.g. save/sv_supp/<tag>/main.')
+    parser.add_argument('--merge-root', action='append', default=[],
+                        help='Additional result root to merge by method tag and seed.')
     parser.add_argument('--replace-root', default=None,
                         help='Optional root whose runs replace matching method tags from the base root.')
     parser.add_argument('--replace-tags', default='',
@@ -57,7 +59,7 @@ def main():
                         help='Also write a PNG copy under save/.')
     args = parser.parse_args()
 
-    data = defaultdict(list)
+    data = defaultdict(dict)
     if args.root:
         run_dir = Path(args.root)
     elif args.tag and (SAVE / 'sv_supp' / args.tag / 'main').exists():
@@ -85,7 +87,22 @@ def main():
             continue
         with open(pkl, 'rb') as f:
             d = pickle.load(f)
-        data[t].append(normalize(d['test_accuracy']))
+        seed = int((d.get('args') or {}).get('seed', len(data[t])))
+        data[t][seed] = normalize(d['test_accuracy'])
+
+    for merge_root in args.merge_root:
+        merge_dir = Path(merge_root)
+        if not merge_dir.exists():
+            raise FileNotFoundError(f'Merge directory not found: {merge_dir}')
+        for pkl in sorted(merge_dir.rglob('*.pkl')):
+            t = find_tag(pkl.name)
+            if t is None:
+                continue
+            with open(pkl, 'rb') as f:
+                d = pickle.load(f)
+            seed = int((d.get('args') or {}).get('seed', len(data[t])))
+            data[t][seed] = normalize(d['test_accuracy'])
+        print(f'merged {merge_dir}')
 
     replace_tags = {tag.strip() for tag in args.replace_tags.split(',') if tag.strip()}
     if args.replace_root:
@@ -95,26 +112,28 @@ def main():
         if not replace_dir.exists():
             raise FileNotFoundError(f'Replacement directory not found: {replace_dir}')
         for tag in replace_tags:
-            data[tag] = []
+            data[tag] = {}
         for pkl in sorted(replace_dir.rglob('*.pkl')):
             t = find_tag(pkl.name)
             if t not in replace_tags:
                 continue
             with open(pkl, 'rb') as f:
                 d = pickle.load(f)
-            data[t].append(normalize(d['test_accuracy']))
+            seed = int((d.get('args') or {}).get('seed', len(data[t])))
+            data[t][seed] = normalize(d['test_accuracy'])
         print(f'replaced {sorted(replace_tags)} from {replace_dir}')
 
     fig, ax = plt.subplots(figsize=(7.0, 4.4))
     lengths = []
     for tag, label, color, ls in METHODS:
-        print(f'{label}: {len(data[tag])} runs')
+        print(f'{label}: {len(data[tag])} runs, seeds={sorted(data[tag])}')
         if tag not in data or not data[tag]:
             continue
         # Pad to common length
-        L = min(len(a) for a in data[tag])
+        method_runs = list(data[tag].values())
+        L = min(len(a) for a in method_runs)
         lengths.append(L)
-        runs = np.stack([a[:L] for a in data[tag]], axis=0)
+        runs = np.stack([a[:L] for a in method_runs], axis=0)
         runs_smooth = np.stack([smooth_ema(r, alpha=0.1) for r in runs], axis=0)
         mean = runs_smooth.mean(axis=0)
         x = np.arange(1, L + 1)
@@ -122,8 +141,10 @@ def main():
 
     ax.set_xlabel('Communication round')
     ax.set_ylabel('Test accuracy (%)')
+    run_counts = [len(data[tag]) for tag, _, _, _ in METHODS if data[tag]]
+    count_label = str(min(run_counts)) if run_counts and len(set(run_counts)) == 1 else 'matched'
     ax.set_title(r'CIFAR-10, Dirichlet $\alpha=0.1$, channel-noise diagnostic, '
-                 'mean over 3 seeds')
+                 f'mean over {count_label} seeds')
     ax.grid(alpha=0.3, linestyle=':')
     ax.legend(loc='lower right', fontsize=9, ncol=2, framealpha=0.85)
     if not lengths:

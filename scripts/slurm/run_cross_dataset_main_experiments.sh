@@ -83,7 +83,7 @@ SV_UPDATE_ARGS="--shapley_update_method mean --shapley_alpha 0.5"
 SV_CC_ARGS="--shapley_estimator complementary --shapley_allocation neyman --shapley_pilot_samples 1 --shapley_max_iter 20"
 FEDPROX_ARGS="--no_shapley --selection_method random --use_fedprox --fedprox_mu ${FEDPROX_MU:-0.01}"
 OORT_ARGS="--no_shapley --selection_method oort"
-GCA_ARGS="--no_shapley --selection_method gca --gca_learning_weight 0.5 --gca_channel_weight 0.3 --gca_energy_weight 0.2"
+GCA_ARGS="--no_shapley --selection_method gca --gca_mode paper --gca_rho_dsi 0.5 --gca_rho_csi 0.5 --gca_lambda_energy 0.5"
 
 echo ""
 echo "Configuration"

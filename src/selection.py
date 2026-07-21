@@ -518,13 +518,25 @@ def gradient_channel_aware_selection(learning_signals: np.ndarray,
                                      learning_weight: float = 0.5,
                                      channel_weight: float = 0.3,
                                      energy_weight: float = 0.2,
+                                     mode: str = 'paper',
+                                     rho_dsi: float = 0.5,
+                                     rho_csi: float = 0.5,
+                                     lambda_energy: float = 0.5,
                                      available_clients: List[int] = None) -> List[int]:
     """Gradient/channel/energy-aware scheduler adapted from AirComp FEEL.
 
-    The original AirComp scheduler ranks devices by update importance, channel
-    quality, and energy cost. In the digital-FL baseline we use stale local loss
-    as the available learning-importance proxy and keep standard FedAvg
-    aggregation unchanged.
+    ``mode='paper'`` follows the source paper's hierarchical indicator:
+
+        V_n,t = rho_dsi * v_DSI + rho_csi * v_CSI
+        I_n,t = (1 - lambda_energy) * V_n,t - lambda_energy * E_n,t
+
+    The source normalizes DSI and CSI by their respective round maxima. The
+    current digital-FL experiment retains fixed-K client selection and standard
+    FedAvg aggregation; consequently ``learning_signals`` is the latest
+    available proxy for the source paper's local gradient norm.
+
+    ``mode='legacy'`` preserves the former direct three-weight adaptation for
+    backwards compatibility with archived runs.
     """
     num_clients = len(learning_signals)
     if available_clients is None or len(available_clients) == 0:
@@ -540,15 +552,47 @@ def gradient_channel_aware_selection(learning_signals: np.ndarray,
             return np.ones_like(x) * default
         return (x - lo) / (hi - lo)
 
-    learning = _minmax(learning_signals, default=1.0)
-    channel = _minmax(np.abs(channel_gains), default=1.0)
-    energy = _minmax(energy_costs, default=0.0)
+    def _max_normalize(x, default=1.0):
+        x = np.asarray(x, dtype=np.float64)
+        x = np.abs(x)
+        finite = np.isfinite(x)
+        if not finite.any():
+            return np.ones_like(x) * default
+        scale = float(np.max(x[finite]))
+        if scale <= 1e-12:
+            return np.ones_like(x) * default
+        result = x / scale
+        result[~np.isfinite(result)] = 0.0
+        return result
 
-    score = (
-        learning_weight * learning
-        + channel_weight * channel
-        - energy_weight * energy
-    )
+    if mode == 'legacy':
+        learning = _minmax(learning_signals, default=1.0)
+        channel = _minmax(np.abs(channel_gains), default=1.0)
+        energy = _minmax(energy_costs, default=0.0)
+        score = (
+            learning_weight * learning
+            + channel_weight * channel
+            - energy_weight * energy
+        )
+    elif mode == 'paper':
+        rho_sum = float(rho_dsi) + float(rho_csi)
+        if rho_sum <= 0.0:
+            raise ValueError('GCA paper rho weights must have a positive sum')
+        rho_dsi = float(rho_dsi) / rho_sum
+        rho_csi = float(rho_csi) / rho_sum
+        lambda_energy = float(lambda_energy)
+        if not 0.0 <= lambda_energy <= 1.0:
+            raise ValueError('GCA paper lambda_energy must lie in [0, 1]')
+        dsi = _max_normalize(learning_signals, default=1.0)
+        csi = _max_normalize(channel_gains, default=1.0)
+        # Equation (21) followed by Equation (23) in Du et al. (JSAC 2023).
+        device_quality = rho_dsi * dsi + rho_csi * csi
+        score = (1.0 - lambda_energy) * device_quality - lambda_energy * np.asarray(
+            energy_costs, dtype=np.float64
+        )
+        score[~np.isfinite(score)] = -np.inf
+    else:
+        raise ValueError(f'Unknown GCA mode: {mode}')
 
     mask = np.zeros(num_clients, dtype=bool)
     mask[available_clients] = True

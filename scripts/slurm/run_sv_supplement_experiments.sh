@@ -127,7 +127,7 @@ if [ "${RUN_MAIN}" = "1" ]; then
 
         run_cmd "GCA: gradient/channel/energy-aware selection, seed=${SEED}" "${OUT}" \
             ${BASE_ARGS} --seed ${SEED} \
-            --no_shapley --selection_method gca \
+            --no_shapley --selection_method gca --gca_mode paper --gca_rho_dsi 0.5 --gca_rho_csi 0.5 --gca_lambda_energy 0.5 \
             ${ENERGY_ARGS} ${DP_ARGS} \
             --output_folder ${OUT}
 
