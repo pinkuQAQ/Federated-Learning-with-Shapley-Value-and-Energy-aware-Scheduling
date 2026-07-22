@@ -68,15 +68,23 @@ def args_parser():
     parser.add_argument('--oort_pacer_window', type=int, default=20,
                         help='Oort pacer window W')
     parser.add_argument('--oort_pacer_step', type=float, default=0.0,
-                        help='Oort pacer duration step; 0 sets it from observed client durations')
+                        help='deprecated Oort pacer-delta override; use --oort_pacer_delta')
+    parser.add_argument('--oort_pacer_delta', type=float, default=5.0,
+                        help='Oort pacer percentile increment (default: 5)')
+    parser.add_argument('--oort_round_threshold', type=float, default=10.0,
+                        help='Oort initial preferred-duration percentile (default: 10)')
     parser.add_argument('--oort_straggler_penalty', type=float, default=2.0,
                         help='Oort straggler penalty alpha')
     parser.add_argument('--oort_cutoff_util', type=float, default=0.95,
                         help='Oort utility cutoff ratio for exploitation pool')
     parser.add_argument('--oort_clip_percentile', type=float, default=95.0,
                         help='Oort utility clipping percentile for robust exploitation')
-    parser.add_argument('--oort_blacklist_rounds', type=int, default=0,
-                        help='Oort blacklist cooldown after repeated exploitation; 0 disables')
+    parser.add_argument('--oort_blacklist_rounds', type=int, default=10,
+                        help='blacklist clients selected more than this many rounds; -1 disables')
+    parser.add_argument('--oort_blacklist_max_fraction', type=float, default=0.3,
+                        help='maximum fraction of Oort clients that may be blacklisted')
+    parser.add_argument('--oort_sample_window', type=float, default=5.0,
+                        help='Oort unexplored-client candidate-window multiplier')
     parser.add_argument('--gca_learning_weight', type=float, default=0.5,
                         help='Legacy GCA adaptation weight for stale learning-importance signal')
     parser.add_argument('--gca_channel_weight', type=float, default=0.3,

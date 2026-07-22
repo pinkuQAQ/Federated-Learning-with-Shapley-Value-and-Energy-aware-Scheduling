@@ -571,22 +571,27 @@ def _build_oort_selector(args, num_selected, user_groups):
         max(int(len(user_groups[i]) * TRAIN_SPLIT_RATIO), 1)
         for i in range(args.num_users)
     ], dtype=np.float64)
-    if getattr(args, 'oort_pacer_step', 0.0) > 0.0:
-        pacer_step = float(args.oort_pacer_step)
-    else:
-        pacer_step = max(float(np.percentile(train_sizes, 25)) / max(float(np.median(train_sizes)), 1.0), 1e-3)
     return OortSelector(
         num_clients=args.num_users,
         sample_size=num_selected,
         epsilon=args.oort_epsilon,
         epsilon_decay=args.oort_epsilon_decay,
         epsilon_min=args.oort_epsilon_min,
-        pacer_step=pacer_step,
+        pacer_step=args.oort_pacer_step,
         pacer_window=args.oort_pacer_window,
+        pacer_delta=args.oort_pacer_delta,
+        round_threshold=args.oort_round_threshold,
         straggler_penalty=args.oort_straggler_penalty,
         cutoff_util=args.oort_cutoff_util,
         clip_percentile=args.oort_clip_percentile,
         blacklist_rounds=args.oort_blacklist_rounds,
+        blacklist_max_fraction=args.oort_blacklist_max_fraction,
+        sample_window=args.oort_sample_window,
+        # Oort registers every client before round one. This simulator has no
+        # device/network trace, so local sample count is the deterministic,
+        # hardware-independent proxy for both initial reward and duration.
+        initial_rewards=train_sizes,
+        initial_durations=train_sizes,
         seed=args.seed,
     )
 
@@ -1126,11 +1131,14 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 f.write(f"- Oort epsilon: {args.oort_epsilon}\n")
                 f.write(f"- Oort epsilon decay/min: {args.oort_epsilon_decay}/{args.oort_epsilon_min}\n")
                 f.write(f"- Oort pacer window: {args.oort_pacer_window}\n")
-                f.write(f"- Oort pacer step: {args.oort_pacer_step}\n")
+                f.write(f"- Oort pacer delta/initial percentile: {args.oort_pacer_delta}/{args.oort_round_threshold}\n")
                 f.write(f"- Oort straggler penalty alpha: {args.oort_straggler_penalty}\n")
                 f.write(f"- Oort cutoff utility ratio: {args.oort_cutoff_util}\n")
                 f.write(f"- Oort clip percentile: {args.oort_clip_percentile}\n")
                 f.write(f"- Oort blacklist rounds: {args.oort_blacklist_rounds}\n")
+                f.write(f"- Oort blacklist max fraction: {args.oort_blacklist_max_fraction}\n")
+                f.write(f"- Oort unexplored sample window: {args.oort_sample_window}\n")
+                f.write("- Oort duration proxy: local training sample count\n")
             if args.selection_method == 'fedmsv':
                 f.write(f"- Fed-MSV guided prefix m: {args.fedmsv_guided_prefix}\n")
                 f.write(f"- Fed-MSV epsilon_a/b/c: {args.fedmsv_epsilon_a}/{args.fedmsv_epsilon_b}/{args.fedmsv_epsilon_c}\n")
@@ -1299,8 +1307,11 @@ if __name__ == '__main__':
         print("\n" + "=" * 60)
         print("启用 Oort 训练端客户端选择 (Algorithm 1)")
         print(f"epsilon: {args.oort_epsilon} -> min {args.oort_epsilon_min}, decay={args.oort_epsilon_decay}")
-        print(f"pacer: W={args.oort_pacer_window}, step={oort_selector.pacer_step:.6f}, alpha={args.oort_straggler_penalty}")
+        print(f"pacer: W={args.oort_pacer_window}, delta={oort_selector.pacer_delta:.1f} percentile points, "
+              f"initial threshold={oort_selector.round_threshold:.1f}%, alpha={args.oort_straggler_penalty}")
         print(f"utility clip percentile: {args.oort_clip_percentile}")
+        print(f"blacklist after >{args.oort_blacklist_rounds} selections, "
+              f"cap={args.oort_blacklist_max_fraction:.2f}")
         print("=" * 60 + "\n")
     else:
         oort_selector = None
@@ -1570,8 +1581,14 @@ if __name__ == '__main__':
                 oort_feedback[int(idx)] = {
                     'loss': float(loss),
                     'loss_square_mean': float(getattr(local_model, 'loss_square_mean', float(loss) ** 2)),
-                    'num_samples': float(actual_samples),
-                    'duration': float(local_duration),
+                    # Oort's |B_i| is the data-bin size, not samples counted
+                    # repeatedly across multiple local epochs.
+                    'num_samples': float(oort_selector.initial_rewards[int(idx)]),
+                    # Source Oort knows a predicted duration for every client
+                    # before selection. Here sample-equivalent local work is
+                    # the only pre-observable, hardware-independent proxy.
+                    'duration': float(oort_selector.initial_durations[int(idx)]),
+                    'wallclock_duration': float(local_duration),
                 }
 
             if getattr(args, 'privacy_mode', 'none') == 'central':

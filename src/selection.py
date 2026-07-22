@@ -308,11 +308,10 @@ def power_of_choice_selection(client_losses: np.ndarray,
     return [c for c, _ in candidate_losses[:num_selected]]
 
 class OortSelector:
-    """Training participant selector following Oort's Algorithm 1.
+    """Source-faithful Oort training selector under a matched FL protocol.
 
-    The selector keeps Oort's observed statistical utility U(i), duration D(i),
-    last selected round L(i), pacer target T, epsilon exploration schedule, and
-    robust exploitation controls. Feedback is supplied after each local round.
+    Clients are registered with initial size rewards and duration estimates.
+    Rewards are normalized and clipped before temporal uncertainty is added.
     """
 
     def __init__(self,
@@ -323,67 +322,95 @@ class OortSelector:
                  epsilon_min: float = 0.2,
                  pacer_step: float = 0.0,
                  pacer_window: int = 20,
+                 pacer_delta: float = 5.0,
+                 round_threshold: float = 10.0,
                  straggler_penalty: float = 2.0,
                  cutoff_util: float = 0.95,
                  clip_percentile: float = 95.0,
-                 blacklist_rounds: int = 0,
+                 blacklist_rounds: int = 10,
+                 blacklist_max_fraction: float = 0.3,
+                 sample_window: float = 5.0,
+                 initial_rewards: np.ndarray = None,
+                 initial_durations: np.ndarray = None,
                  seed: int = 42):
         self.num_clients = int(num_clients)
         self.sample_size = int(sample_size)
         self.epsilon = float(epsilon)
         self.epsilon_decay = float(epsilon_decay)
         self.epsilon_min = float(epsilon_min)
-        self.pacer_step = float(pacer_step)
+        self.pacer_delta = float(pacer_step) if float(pacer_step) > 0.0 else float(pacer_delta)
         self.pacer_window = int(pacer_window)
+        self.round_threshold = float(np.clip(round_threshold, 0.0, 100.0))
         self.straggler_penalty = float(straggler_penalty)
         self.cutoff_util = float(cutoff_util)
         self.clip_percentile = float(clip_percentile)
         self.blacklist_rounds = int(blacklist_rounds)
+        self.blacklist_max_fraction = float(np.clip(blacklist_max_fraction, 0.0, 1.0))
+        self.sample_window = max(float(sample_window), 1.0)
         self.rng = np.random.RandomState(seed)
 
+        if initial_rewards is None:
+            initial_rewards = np.ones(self.num_clients, dtype=np.float64)
+        if initial_durations is None:
+            initial_durations = np.ones(self.num_clients, dtype=np.float64)
+        initial_rewards = np.asarray(initial_rewards, dtype=np.float64)
+        initial_durations = np.asarray(initial_durations, dtype=np.float64)
+        if initial_rewards.shape != (self.num_clients,):
+            raise ValueError('initial_rewards must contain one value per client')
+        if initial_durations.shape != (self.num_clients,):
+            raise ValueError('initial_durations must contain one value per client')
+        initial_rewards = np.nan_to_num(initial_rewards, nan=1.0, posinf=1.0, neginf=1.0)
+        initial_durations = np.nan_to_num(initial_durations, nan=1.0, posinf=1.0, neginf=1.0)
+        self.initial_rewards = np.maximum(initial_rewards, 1e-4)
+        self.initial_durations = np.maximum(initial_durations, 1e-4)
+
         self.round = 0
-        self.target_duration = max(self.pacer_step, 1e-6)
-        self.statistical_utility = np.zeros(self.num_clients, dtype=np.float64)
-        self.durations = np.zeros(self.num_clients, dtype=np.float64)
-        self.last_selected_round = -np.ones(self.num_clients, dtype=np.int64)
+        self.target_duration = float('inf')
+        self.statistical_utility = self.initial_rewards.copy()
+        self.durations = self.initial_durations.copy()
+        self.last_selected_round = np.zeros(self.num_clients, dtype=np.int64)
         self.participation_counts = np.zeros(self.num_clients, dtype=np.int64)
         self.explored = np.zeros(self.num_clients, dtype=bool)
-        self.blacklist_until = np.zeros(self.num_clients, dtype=np.int64)
-        self.round_utility_history = []
+        self.blacklisted = np.zeros(self.num_clients, dtype=bool)
+        self.exploit_utility_history = []
+        self.explore_utility_history = []
+        self.last_exploit_clients = []
+        self.last_explore_clients = []
         self.selection_history = []
 
     def select(self, available_clients: List[int] = None) -> List[int]:
         self.round += 1
-        if available_clients is None or len(available_clients) == 0:
+        if available_clients is None:
             available_clients = list(range(self.num_clients))
         candidates = np.asarray(available_clients, dtype=np.int64)
         if candidates.size == 0:
             return []
 
-        candidates = candidates[
-            (candidates >= 0)
-            & (candidates < self.num_clients)
-            & (self.blacklist_until[candidates] <= self.round)
-        ]
+        candidates = np.unique(candidates[(candidates >= 0) & (candidates < self.num_clients)])
+        self._refresh_blacklist()
+        candidates = candidates[~self.blacklisted[candidates]]
         if candidates.size == 0:
-            candidates = np.asarray(available_clients, dtype=np.int64)
+            return []
 
         k = min(self.sample_size, int(candidates.size))
+        self._update_pacer()
+        self._update_target_duration()
         explored = [int(c) for c in candidates if self.explored[c]]
         unexplored = [int(c) for c in candidates if not self.explored[c]]
 
-        explore_k = min(int(np.ceil(self.epsilon * k)), len(unexplored))
-        exploit_k = max(k - explore_k, 0)
-        if exploit_k > len(explored):
-            explore_k = min(k - len(explored), len(unexplored))
-            exploit_k = k - explore_k
+        epsilon_used = float(self.epsilon)
+        exploit_k = min(int(k * (1.0 - epsilon_used)), len(explored))
+        explore_k = min(k - exploit_k, len(unexplored))
 
-        selected = []
+        exploited = []
         if exploit_k > 0 and explored:
-            selected.extend(self._sample_exploited(explored, exploit_k))
+            exploited = self._sample_exploited(explored, exploit_k)
 
+        explored_now = []
         if explore_k > 0 and unexplored:
-            selected.extend(self._sample_unexplored_by_speed(unexplored, explore_k))
+            explored_now = self._sample_unexplored(unexplored, explore_k)
+
+        selected = exploited + explored_now
 
         if len(selected) < k:
             remaining = [int(c) for c in candidates if int(c) not in set(selected)]
@@ -395,42 +422,32 @@ class OortSelector:
         self.selection_history.append({
             'round': self.round,
             'selected': list(selected),
-            'epsilon': float(self.epsilon),
+            'exploited': list(exploited),
+            'explored': list(explored_now),
+            'epsilon': epsilon_used,
+            'round_threshold': float(self.round_threshold),
             'target_duration': float(self.target_duration),
         })
-        self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
+        self.last_exploit_clients = list(exploited)
+        self.last_explore_clients = list(explored_now)
+        if unexplored:
+            self.epsilon = max(self.epsilon * self.epsilon_decay, self.epsilon_min)
+        else:
+            # The public Oort selector disables exploration once every client
+            # has been tried; subsequent rounds fully exploit observed scores.
+            self.epsilon = 0.0
         return selected[:k]
 
     def update_feedback(self, feedback: Dict[int, Dict[str, float]]) -> None:
-        if not feedback:
-            self.round_utility_history.append(0.0)
-            self._update_pacer()
-            return
-
-        raw_utils = []
-        for client_id, item in feedback.items():
-            loss_square_mean = max(float(item.get('loss_square_mean', item.get('loss', 0.0) ** 2)), 0.0)
-            samples = max(float(item.get('num_samples', 1.0)), 1.0)
-            duration = max(float(item.get('duration', 0.0)), 1e-6)
-            utility = samples * np.sqrt(loss_square_mean)
-            if np.isfinite(utility):
-                raw_utils.append(utility)
-
-        clip_value = np.inf
-        if raw_utils and self.clip_percentile < 100.0:
-            clip_value = float(np.percentile(raw_utils, self.clip_percentile))
-
-        achieved_utility = 0.0
+        feedback = feedback or {}
         for client_id, item in feedback.items():
             cid = int(client_id)
             if cid < 0 or cid >= self.num_clients:
                 continue
             loss_square_mean = max(float(item.get('loss_square_mean', item.get('loss', 0.0) ** 2)), 0.0)
             samples = max(float(item.get('num_samples', 1.0)), 1.0)
-            duration = max(float(item.get('duration', 0.0)), 1e-6)
+            duration = max(float(item.get('duration', self.durations[cid])), 1e-4)
             utility = samples * np.sqrt(loss_square_mean)
-            if np.isfinite(clip_value):
-                utility = min(utility, clip_value)
             if not np.isfinite(utility):
                 utility = 0.0
 
@@ -439,33 +456,57 @@ class OortSelector:
             self.last_selected_round[cid] = self.round
             self.participation_counts[cid] += 1
             self.explored[cid] = True
-            achieved_utility += utility
 
-            if self.blacklist_rounds > 0 and self.participation_counts[cid] >= self.blacklist_rounds:
-                self.blacklist_until[cid] = self.round + self.blacklist_rounds
-                self.participation_counts[cid] = 0
-
-        self.round_utility_history.append(float(achieved_utility))
-        self._update_pacer()
+        self.exploit_utility_history.append(
+            self._mean_feedback_utility(self.last_exploit_clients, feedback)
+        )
+        self.explore_utility_history.append(
+            self._mean_feedback_utility(self.last_explore_clients, feedback)
+        )
 
     def get_state(self) -> Dict[str, object]:
         return {
+            'implementation': 'source_faithful_matched_protocol',
+            'duration_proxy': 'local_training_sample_count',
             'epsilon': float(self.epsilon),
+            'pacer_delta': float(self.pacer_delta),
+            'round_threshold': float(self.round_threshold),
             'target_duration': float(self.target_duration),
             'statistical_utility': self.statistical_utility.copy(),
             'durations': self.durations.copy(),
+            'initial_rewards': self.initial_rewards.copy(),
+            'initial_durations': self.initial_durations.copy(),
             'last_selected_round': self.last_selected_round.copy(),
             'explored': self.explored.copy(),
+            'blacklisted': self.blacklisted.copy(),
             'participation_counts': self.participation_counts.copy(),
-            'round_utility_history': list(self.round_utility_history),
+            'exploit_utility_history': list(self.exploit_utility_history),
+            'explore_utility_history': list(self.explore_utility_history),
             'selection_history': list(self.selection_history),
         }
 
     def _client_utilities(self, clients: List[int]) -> np.ndarray:
         clients_arr = np.asarray(clients, dtype=np.int64)
-        utility = self.statistical_utility[clients_arr].copy()
-        stale = np.maximum(self.round - self.last_selected_round[clients_arr], 1)
-        utility += 0.1 * np.sqrt(np.log(max(self.round, 2)) / stale)
+        rewards = self.statistical_utility[clients_arr].copy()
+        finite_rewards = rewards[np.isfinite(rewards) & (rewards > 0.0)]
+        if finite_rewards.size == 0:
+            normalized = np.zeros_like(rewards)
+        else:
+            clip_index = min(
+                int(finite_rewards.size * np.clip(self.clip_percentile / 100.0, 0.0, 1.0)),
+                finite_rewards.size - 1,
+            )
+            clip_value = float(np.sort(finite_rewards)[clip_index])
+            reward_min = float(np.min(finite_rewards)) * 0.999
+            reward_max = float(np.max(finite_rewards))
+            reward_range = max(reward_max - reward_min, 1e-4)
+            normalized = (np.minimum(rewards, clip_value) - reward_min) / reward_range
+
+        # Match Oort's public implementation: L(i) is the last-involved round,
+        # not the elapsed value R-L(i), and 0.1 stays inside the square root.
+        last_round = np.maximum(self.last_selected_round[clients_arr], 1)
+        uncertainty = np.sqrt(0.1 * np.log(max(self.round, 2)) / last_round)
+        utility = normalized + uncertainty
 
         durations = self.durations[clients_arr]
         slow = durations > self.target_duration
@@ -481,7 +522,7 @@ class OortSelector:
             return []
 
         sorted_utils = np.sort(utilities)[::-1]
-        cutoff_index = min(max(k - 1, 0), sorted_utils.size - 1)
+        cutoff_index = min(max(k, 0), sorted_utils.size - 1)
         threshold = self.cutoff_util * sorted_utils[cutoff_index]
         pool_mask = utilities >= threshold
         pool = np.asarray(clients, dtype=np.int64)[pool_mask]
@@ -493,22 +534,80 @@ class OortSelector:
         probs = pool_utils / pool_utils.sum() if pool_utils.sum() > 1e-12 else None
         return self.rng.choice(pool, size=min(k, pool.size), replace=False, p=probs).astype(int).tolist()
 
-    def _sample_unexplored_by_speed(self, clients: List[int], k: int) -> List[int]:
-        speed_proxy = 1.0 / np.maximum(self.durations[np.asarray(clients, dtype=np.int64)], 1e-6)
-        if np.allclose(speed_proxy, speed_proxy[0]):
-            probs = None
-        else:
-            probs = speed_proxy / speed_proxy.sum()
-        return self.rng.choice(clients, size=min(k, len(clients)), replace=False, p=probs).astype(int).tolist()
+    def _sample_unexplored(self, clients: List[int], k: int) -> List[int]:
+        clients_arr = np.asarray(clients, dtype=np.int64)
+        rewards = self.initial_rewards[clients_arr].copy()
+        durations = self.durations[clients_arr]
+        slow = durations > self.target_duration
+        if np.any(slow):
+            rewards[slow] *= (
+                self.target_duration / np.maximum(durations[slow], 1e-4)
+            ) ** self.straggler_penalty
+        rewards = np.maximum(np.nan_to_num(rewards, nan=0.0), 0.0)
+
+        window_size = min(max(int(np.ceil(self.sample_window * k)), k), len(clients_arr))
+        order = np.argsort(rewards)[::-1][:window_size]
+        pool = clients_arr[order]
+        pool_rewards = rewards[order]
+        probs = pool_rewards / pool_rewards.sum() if pool_rewards.sum() > 1e-12 else None
+        return self.rng.choice(
+            pool, size=min(k, len(pool)), replace=False, p=probs
+        ).astype(int).tolist()
 
     def _update_pacer(self) -> None:
         w = self.pacer_window
-        if self.pacer_step <= 0.0 or w <= 0 or len(self.round_utility_history) < 2 * w:
+        if w <= 0 or self.round < 2 * w or self.round % w != 0:
             return
-        previous = np.sum(self.round_utility_history[-2 * w:-w])
-        recent = np.sum(self.round_utility_history[-w:])
-        if previous > recent:
-            self.target_duration += self.pacer_step
+        if len(self.exploit_utility_history) < 2 * w:
+            return
+        previous = float(np.sum(self.exploit_utility_history[-2 * w:-w]))
+        recent = float(np.sum(self.exploit_utility_history[-w:]))
+        change = abs(recent - previous)
+        if change <= previous * 0.1:
+            self.round_threshold = min(100.0, self.round_threshold + self.pacer_delta)
+        elif change >= previous * 5.0:
+            self.round_threshold = max(self.pacer_delta, self.round_threshold - self.pacer_delta)
+
+    def _update_target_duration(self) -> None:
+        if self.round_threshold >= 100.0:
+            self.target_duration = float('inf')
+            return
+        index = min(
+            int(len(self.durations) * self.round_threshold / 100.0),
+            len(self.durations) - 1,
+        )
+        self.target_duration = float(np.sort(self.durations)[index])
+
+    def _refresh_blacklist(self) -> None:
+        self.blacklisted[:] = False
+        if self.blacklist_rounds < 0:
+            return
+        ordered = np.argsort(self.participation_counts)[::-1]
+        eligible = [
+            int(cid) for cid in ordered
+            if self.participation_counts[cid] > self.blacklist_rounds
+        ]
+        max_len = int(self.blacklist_max_fraction * self.num_clients)
+        if max_len <= 0:
+            return
+        self.blacklisted[eligible[:max_len]] = True
+
+    def _mean_feedback_utility(self, clients: List[int],
+                               feedback: Dict[int, Dict[str, float]]) -> float:
+        utilities = []
+        for client_id in clients:
+            item = feedback.get(int(client_id))
+            if item is None:
+                continue
+            loss_square_mean = max(
+                float(item.get('loss_square_mean', item.get('loss', 0.0) ** 2)),
+                0.0,
+            )
+            samples = max(float(item.get('num_samples', 1.0)), 1.0)
+            utility = samples * np.sqrt(loss_square_mean)
+            if np.isfinite(utility):
+                utilities.append(float(utility))
+        return float(np.mean(utilities)) if utilities else 0.0
 
 
 def gradient_channel_aware_selection(learning_signals: np.ndarray,
