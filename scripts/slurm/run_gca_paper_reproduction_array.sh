@@ -9,7 +9,7 @@
 #SBATCH --output=/data/home/zhaozhanshan/FLSV/logs/slurm_gca_paper_%A_%a.out
 #SBATCH --error=/data/home/zhaozhanshan/FLSV/logs/slurm_gca_paper_%A_%a.err
 
-set -euo pipefail
+set -eo pipefail
 
 source ~/.bashrc
 if command -v conda >/dev/null 2>&1; then
@@ -23,8 +23,23 @@ else
     echo "ERROR: conda.sh not found."
     exit 1
 fi
-conda activate flsv
-export LD_PRELOAD=/data/home/zhaozhanshan/lib/libittnotify_stub.so
+
+# The campus platform keeps this environment under ENTER/envs rather than
+# registering it under the short "flsv" name on every compute node.
+CONDA_ENV_NAME=${CONDA_ENV_NAME:-flsv}
+CONDA_ENV_PATH=${CONDA_ENV_PATH:-/data/home/zhaozhanshan/ENTER/envs/flsv}
+if [ -d "${CONDA_ENV_PATH}" ]; then
+    echo "Activating conda environment by path: ${CONDA_ENV_PATH}"
+    conda activate "${CONDA_ENV_PATH}"
+else
+    echo "Activating conda environment by name: ${CONDA_ENV_NAME}"
+    conda activate "${CONDA_ENV_NAME}"
+fi
+
+ITT_STUB=${ITT_STUB:-/data/home/zhaozhanshan/lib/libittnotify_stub.so}
+if [ -f "${ITT_STUB}" ]; then
+    export LD_PRELOAD="${ITT_STUB}"
+fi
 
 PROJECT_ROOT=${PROJECT_ROOT:-/data/home/zhaozhanshan/FLSV}
 cd "${PROJECT_ROOT}/src"
