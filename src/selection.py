@@ -129,6 +129,94 @@ def softmax_score_selection(scores: np.ndarray,
     return selected
 
 
+def channel_feasible_clients(channel_gains: np.ndarray, num_selected: int,
+                             available_clients: List[int] = None,
+                             drop_quantile: float = 0.0,
+                             min_gain: float = 0.0):
+    '''Drop poor channels and restore enough candidates for aggregation.'''
+    gains = np.asarray(channel_gains, dtype=np.float64)
+    if gains.ndim != 1:
+        raise ValueError('channel_gains must be a one-dimensional array')
+    if not 0.0 <= float(drop_quantile) < 1.0:
+        raise ValueError('drop_quantile must be in [0, 1)')
+    if not np.isfinite(min_gain) or float(min_gain) < 0.0:
+        raise ValueError('min_gain must be a non-negative finite value')
+    candidates = (np.arange(gains.size, dtype=np.int64) if available_clients is None
+                  else np.asarray(list(dict.fromkeys(available_clients)), dtype=np.int64))
+    if np.any(candidates < 0) or np.any(candidates >= gains.size):
+        raise ValueError('available_clients contains an invalid client index')
+    target = min(max(int(num_selected), 0), candidates.size)
+    candidate_gains = np.nan_to_num(np.abs(gains[candidates]), nan=0.0,
+                                    posinf=np.finfo(np.float64).max, neginf=0.0)
+    q_threshold = (float(np.quantile(candidate_gains, float(drop_quantile)))
+                   if candidates.size and drop_quantile > 0.0 else 0.0)
+    threshold = max(float(min_gain), q_threshold)
+    kept = candidates[candidate_gains >= threshold].tolist()
+    fallback_count = 0
+    if len(kept) < target:
+        kept_set = set(kept)
+        for client_id in candidates[np.argsort(candidate_gains)[::-1]]:
+            if int(client_id) not in kept_set:
+                kept.append(int(client_id))
+                kept_set.add(int(client_id))
+                fallback_count += 1
+            if len(kept) >= target:
+                break
+    metadata = {
+        'enabled': bool(drop_quantile > 0.0 or min_gain > 0.0),
+        'candidate_count_before': int(candidates.size),
+        'candidate_count_after': int(len(kept)),
+        'quantile_threshold': q_threshold,
+        'effective_threshold': threshold,
+        'fallback_count': int(fallback_count),
+    }
+    return [int(client_id) for client_id in kept], metadata
+
+
+def online_exploration_selection(scores: np.ndarray,
+                                 observation_counts: np.ndarray,
+                                 num_selected: int,
+                                 exploration_slots: int = 1,
+                                 temperature: float = 1.0,
+                                 available_clients: List[int] = None,
+                                 rng=None) -> List[int]:
+    '''Select online without a full round-robin Shapley warmup.'''
+    scores = np.asarray(scores, dtype=np.float64)
+    counts = np.asarray(observation_counts, dtype=np.float64)
+    if scores.ndim != 1 or counts.ndim != 1 or scores.size != counts.size:
+        raise ValueError('scores and observation_counts must be equal-length vectors')
+    if np.any(counts < 0) or not np.all(np.isfinite(counts)):
+        raise ValueError('observation_counts must be finite and non-negative')
+    candidates = (list(range(scores.size)) if available_clients is None else
+                  list(dict.fromkeys(int(client_id) for client_id in available_clients)))
+    target = min(max(int(num_selected), 0), len(candidates))
+    if target == 0:
+        return []
+    rng = np.random if rng is None else rng
+    candidate_counts = counts[candidates]
+    if np.all(candidate_counts == 0):
+        return softmax_score_selection(
+            scores, target, temperature=temperature,
+            available_clients=candidates, rng=rng)
+
+    explore_count = min(max(int(exploration_slots), 0), target)
+    selected = []
+    if explore_count > 0:
+        minimum_count = float(np.min(candidate_counts))
+        exploration_pool = [client_id for client_id in candidates
+                            if counts[client_id] == minimum_count]
+        selected.extend(softmax_score_selection(
+            scores, min(explore_count, len(exploration_pool)),
+            temperature=temperature, available_clients=exploration_pool, rng=rng))
+
+    selected_set = set(selected)
+    remaining = [client_id for client_id in candidates if client_id not in selected_set]
+    selected.extend(softmax_score_selection(
+        scores, target - len(selected), temperature=temperature,
+        available_clients=remaining, rng=rng))
+    return selected
+
+
 def energy_aware_selection(shapley_values: np.ndarray,
                            energy_scores: np.ndarray,
                            num_selected: int,
@@ -307,6 +395,68 @@ def power_of_choice_selection(client_losses: np.ndarray,
 
     return [c for c, _ in candidate_losses[:num_selected]]
 
+
+def build_oort_client_priors(train_sizes: np.ndarray,
+                             duration_proxy: str = 'workload',
+                             reward_cap_samples: float = 0.0,
+                             profile_sigma: float = 0.5,
+                             profile_compute_weight: float = 0.5,
+                             seed: int = 42):
+    """Create pre-registered Oort rewards and completion-time estimates.
+
+    ``profile`` mirrors Oort's use of device and network metadata while keeping
+    the matched experiment self-contained. Compute and uplink speeds are drawn
+    once from deterministic log-normal profiles and are independent of client
+    data size. Both completion-time components are median-normalized before
+    they are combined, so the weight has an explicit interpretation.
+    """
+    train_sizes = np.asarray(train_sizes, dtype=np.float64)
+    if train_sizes.ndim != 1 or train_sizes.size == 0:
+        raise ValueError('train_sizes must be a non-empty one-dimensional array')
+    train_sizes = np.maximum(
+        np.nan_to_num(train_sizes, nan=1.0, posinf=1.0, neginf=1.0),
+        1.0,
+    )
+
+    rewards = train_sizes.copy()
+    if float(reward_cap_samples) > 0.0:
+        rewards = np.minimum(rewards, float(reward_cap_samples))
+
+    metadata = {'duration_proxy': duration_proxy}
+    if duration_proxy == 'workload':
+        durations = train_sizes.copy()
+    elif duration_proxy == 'equal':
+        durations = np.ones_like(train_sizes)
+    elif duration_proxy == 'profile':
+        sigma = max(float(profile_sigma), 0.0)
+        compute_weight = float(np.clip(profile_compute_weight, 0.0, 1.0))
+        profile_seed = int(seed) + 104729
+        rng = np.random.RandomState(profile_seed)
+        compute_speed = rng.lognormal(mean=0.0, sigma=sigma, size=train_sizes.size)
+        network_speed = rng.lognormal(mean=0.0, sigma=sigma, size=train_sizes.size)
+
+        workload = rewards / max(float(np.median(rewards)), 1e-4)
+        compute_component = workload / np.maximum(compute_speed, 1e-4)
+        communication_component = 1.0 / np.maximum(network_speed, 1e-4)
+        compute_component /= max(float(np.median(compute_component)), 1e-4)
+        communication_component /= max(float(np.median(communication_component)), 1e-4)
+        durations = (
+            compute_weight * compute_component
+            + (1.0 - compute_weight) * communication_component
+        )
+        durations /= max(float(np.median(durations)), 1e-4)
+        metadata.update({
+            'profile_seed': profile_seed,
+            'profile_sigma': sigma,
+            'profile_compute_weight': compute_weight,
+            'compute_speed': compute_speed,
+            'network_speed': network_speed,
+        })
+    else:
+        raise ValueError('unknown Oort duration proxy: {}'.format(duration_proxy))
+
+    return rewards, np.maximum(durations, 1e-4), metadata
+
 class OortSelector:
     """Source-faithful Oort training selector under a matched FL protocol.
 
@@ -332,6 +482,8 @@ class OortSelector:
                  sample_window: float = 5.0,
                  initial_rewards: np.ndarray = None,
                  initial_durations: np.ndarray = None,
+                 duration_proxy: str = 'workload',
+                 system_profile: Dict[str, object] = None,
                  seed: int = 42):
         self.num_clients = int(num_clients)
         self.sample_size = int(sample_size)
@@ -363,6 +515,8 @@ class OortSelector:
         initial_durations = np.nan_to_num(initial_durations, nan=1.0, posinf=1.0, neginf=1.0)
         self.initial_rewards = np.maximum(initial_rewards, 1e-4)
         self.initial_durations = np.maximum(initial_durations, 1e-4)
+        self.duration_proxy = str(duration_proxy)
+        self.system_profile = dict(system_profile or {})
 
         self.round = 0
         self.target_duration = float('inf')
@@ -467,7 +621,8 @@ class OortSelector:
     def get_state(self) -> Dict[str, object]:
         return {
             'implementation': 'source_faithful_matched_protocol',
-            'duration_proxy': 'local_training_sample_count',
+            'duration_proxy': self.duration_proxy,
+            'system_profile': self.system_profile,
             'epsilon': float(self.epsilon),
             'pacer_delta': float(self.pacer_delta),
             'round_threshold': float(self.round_threshold),

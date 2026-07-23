@@ -85,6 +85,15 @@ def args_parser():
                         help='maximum fraction of Oort clients that may be blacklisted')
     parser.add_argument('--oort_sample_window', type=float, default=5.0,
                         help='Oort unexplored-client candidate-window multiplier')
+    parser.add_argument('--oort_duration_proxy', type=str, default='workload',
+                        choices=['workload', 'equal', 'profile'],
+                        help='Oort pre-registered system-duration model')
+    parser.add_argument('--oort_reward_cap_samples', type=float, default=0.0,
+                        help='cap initial Oort size reward; 0 leaves it uncapped')
+    parser.add_argument('--oort_profile_sigma', type=float, default=0.5,
+                        help='log-normal spread of synthetic compute/network speeds')
+    parser.add_argument('--oort_profile_compute_weight', type=float, default=0.5,
+                        help='compute share in synthetic Oort completion time')
     parser.add_argument('--gca_learning_weight', type=float, default=0.5,
                         help='Legacy GCA adaptation weight for stale learning-importance signal')
     parser.add_argument('--gca_channel_weight', type=float, default=0.3,
@@ -160,6 +169,17 @@ def args_parser():
                         help='number of clients selected per round')
     parser.add_argument('--selection_beta', type=float, default=1.0,
                         help='softmax temperature beta for score-based client selection')
+    parser.add_argument('--shapley_cold_start', type=str, default='round_robin',
+                        choices=['round_robin', 'online'],
+                        help='Shapley cold start: full round-robin warmup or online exploration')
+    parser.add_argument('--shapley_exploration_slots', type=int, default=1,
+                        help='least-observed clients reserved per round in online cold start')
+    parser.add_argument('--shapley_ucb_c', type=float, default=0.25,
+                        help='uncertainty bonus applied to online Shapley contribution estimates')
+    parser.add_argument('--channel_filter_quantile', type=float, default=0.0,
+                        help='drop this bottom fraction of current channel gains; 0 disables')
+    parser.add_argument('--channel_min_gain', type=float, default=0.0,
+                        help='absolute channel-gain floor before Shapley scheduling; 0 disables')
 
     # ============= 新增：能量相关参数 =============
     parser.add_argument('--use_energy', action='store_true', default=False,

@@ -63,6 +63,8 @@ from selection import (hybrid_selection, random_selection, round_robin_selection
                        greedy_shapley_selection, energy_aware_selection,
                        hybrid_energy_aware_selection, power_of_choice_selection,
                        softmax_score_selection, ucb_selection, OortSelector,
+                       build_oort_client_priors,
+                       channel_feasible_clients, online_exploration_selection,
                        gradient_channel_aware_selection)
 from torch.utils.data import DataLoader
 from energy import EnergyAwareClientManager
@@ -192,9 +194,35 @@ def _get_trainable_clients(user_groups, num_users):
 
 
 def _resolve_initial_rounds(args):
+    if getattr(args, 'shapley_cold_start', 'round_robin') == 'online':
+        return 0
     if args.initial_rounds is None:
         return max(1, math.ceil(args.num_users / args.num_selected))
     return max(1, int(args.initial_rounds))
+
+
+def _online_shapley_estimates(shapley_values, observation_counts, epoch, bonus_c):
+    '''Build neutral-prior contribution estimates with an uncertainty bonus.'''
+    values = np.nan_to_num(np.asarray(shapley_values, dtype=np.float64),
+                           nan=0.0, posinf=0.0, neginf=0.0)
+    counts = np.asarray(observation_counts, dtype=np.float64)
+    if values.ndim != 1 or counts.ndim != 1 or values.size != counts.size:
+        raise ValueError('Shapley values and observation counts must be equal vectors')
+    if float(bonus_c) < 0.0 or not np.isfinite(bonus_c):
+        raise ValueError('shapley_ucb_c must be a non-negative finite value')
+
+    observed = counts > 0
+    estimates = np.full(values.size, 0.5, dtype=np.float64)
+    if np.any(observed):
+        observed_values = values[observed]
+        lower, upper = float(np.min(observed_values)), float(np.max(observed_values))
+        if upper - lower > 1e-12:
+            estimates[observed] = (observed_values - lower) / (upper - lower)
+        else:
+            estimates[observed] = 0.5
+        estimates[~observed] = float(np.median(estimates[observed]))
+    bonus = float(bonus_c) * np.sqrt(np.log(float(epoch) + 2.0) / (counts + 1.0))
+    return estimates + bonus
 
 
 def _filter_available_clients(available_clients, trainable_clients):
@@ -571,6 +599,14 @@ def _build_oort_selector(args, num_selected, user_groups):
         max(int(len(user_groups[i]) * TRAIN_SPLIT_RATIO), 1)
         for i in range(args.num_users)
     ], dtype=np.float64)
+    initial_rewards, initial_durations, system_profile = build_oort_client_priors(
+        train_sizes=train_sizes,
+        duration_proxy=args.oort_duration_proxy,
+        reward_cap_samples=args.oort_reward_cap_samples,
+        profile_sigma=args.oort_profile_sigma,
+        profile_compute_weight=args.oort_profile_compute_weight,
+        seed=args.seed,
+    )
     return OortSelector(
         num_clients=args.num_users,
         sample_size=num_selected,
@@ -587,11 +623,10 @@ def _build_oort_selector(args, num_selected, user_groups):
         blacklist_rounds=args.oort_blacklist_rounds,
         blacklist_max_fraction=args.oort_blacklist_max_fraction,
         sample_window=args.oort_sample_window,
-        # Oort registers every client before round one. This simulator has no
-        # device/network trace, so local sample count is the deterministic,
-        # hardware-independent proxy for both initial reward and duration.
-        initial_rewards=train_sizes,
-        initial_durations=train_sizes,
+        initial_rewards=initial_rewards,
+        initial_durations=initial_durations,
+        duration_proxy=args.oort_duration_proxy,
+        system_profile=system_profile,
         seed=args.seed,
     )
 
@@ -602,7 +637,8 @@ def select_clients(args, epoch, num_selected, initial_rounds,
                    energy_manager, lyapunov_optimizer,
                    client_local_losses, user_groups=None,
                    ucb_rewards=None, ucb_counts=None, oort_selector=None,
-                   fedmsv_selector=None, gca_dsi_signals=None):
+                   fedmsv_selector=None, gca_dsi_signals=None,
+                   shapley_observation_counts=None):
     """统一的客户端选择逻辑"""
     if shapley_values is not None:
         np.nan_to_num(shapley_values, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
@@ -689,7 +725,8 @@ def select_clients(args, epoch, num_selected, initial_rounds,
         if args.use_lyapunov and lyapunov_optimizer is not None:
             return _select_lyapunov(args, epoch, num_selected, shapley_values,
                                     client_participation_counts, available_clients,
-                                    energy_manager, lyapunov_optimizer, user_groups)
+                                    energy_manager, lyapunov_optimizer, user_groups,
+                                    shapley_observation_counts)
 
         return _select_energy_aware(args, epoch, num_selected, initial_rounds,
                                      shapley_values, client_participation_counts,
@@ -703,9 +740,14 @@ def select_clients(args, epoch, num_selected, initial_rounds,
 
 def _select_lyapunov(args, epoch, num_selected, shapley_values,
                      client_participation_counts, available_clients,
-                     energy_manager, lyapunov_optimizer, user_groups):
+                     energy_manager, lyapunov_optimizer, user_groups,
+                     shapley_observation_counts=None):
     """Lyapunov路径：前initial_rounds轮轮询初始化SV，之后Lyapunov动态选择"""
-    if epoch < args.initial_rounds:
+    online_cold_start = (
+        args.use_shapley and
+        getattr(args, 'shapley_cold_start', 'round_robin') == 'online'
+    )
+    if not online_cold_start and epoch < args.initial_rounds:
         candidates = (
             list(range(args.num_users))
             if available_clients is None
@@ -724,8 +766,14 @@ def _select_lyapunov(args, epoch, num_selected, shapley_values,
         energy_manager.channel_gains, client_data_sizes=all_data_sizes
     )
     battery_scores = energy_manager.get_energy_scores(normalize=True)
+    scheduling_shapley = shapley_values
+    if online_cold_start:
+        counts = (shapley_observation_counts if shapley_observation_counts is not None
+                  else np.zeros(args.num_users, dtype=np.int64))
+        scheduling_shapley = _online_shapley_estimates(
+            shapley_values, counts, epoch, getattr(args, 'shapley_ucb_c', 0.25))
     scores = lyapunov_optimizer.compute_scores(
-        shapley_values,
+        scheduling_shapley,
         energy_consumed_estimate,
         battery_scores=battery_scores,
         channel_gains=energy_manager.channel_gains,
@@ -734,6 +782,16 @@ def _select_lyapunov(args, epoch, num_selected, shapley_values,
         channel_weight=args.channel_weight,
         disable_queue_penalty=getattr(args, 'disable_queue_penalty', False),
     )
+
+    if online_cold_start:
+        return online_exploration_selection(
+            scores=scores,
+            observation_counts=counts,
+            num_selected=num_selected,
+            exploration_slots=getattr(args, 'shapley_exploration_slots', 1),
+            temperature=args.selection_beta,
+            available_clients=available_clients,
+        )
 
     return softmax_score_selection(
         scores=scores,
@@ -817,7 +875,7 @@ def _select_lyapunov_without_shapley(args, epoch, num_selected, available_client
     return _select_lyapunov(
         args, epoch, num_selected, zero_shapley,
         client_participation_counts, available_clients,
-        energy_manager, lyapunov_optimizer, user_groups
+        energy_manager, lyapunov_optimizer, user_groups, None
     )
 
 
@@ -944,7 +1002,7 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                   start_time, sv_sample_size=0, ucb_rewards=None, ucb_counts=None,
                   dp_round_history=None, shapley_time_history=None,
                   oort_selector=None, fedmsv_selector=None,
-                  fedmsv_low_quality_clients=None):
+                  fedmsv_low_quality_clients=None, selection_history=None):
     """保存实验结果"""
     os.makedirs(exp_folder, exist_ok=True)
     privacy_mode = getattr(args, 'privacy_mode', 'none')
@@ -979,7 +1037,8 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
         'train_loss': train_loss,
         'train_accuracy': train_accuracy,
         'test_accuracy': test_accuracies,
-        'args': vars(args)
+        'args': vars(args),
+        'selection_history': list(selection_history or []),
     }
 
     if args.use_shapley:
@@ -1127,6 +1186,9 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 f.write(f"- 初始轮数: {args.initial_rounds}\n")
                 f.write(f"- SV验证集样本数: {sv_sample_size}\n")
                 f.write(f"- SV测试集采样种子: 42\n")
+                f.write(f'- Shapley冷启动: {args.shapley_cold_start}\n')
+                f.write(f'- 在线探索名额/UCB系数: {args.shapley_exploration_slots}/{args.shapley_ucb_c}\n')
+                f.write(f'- 信道过滤分位数/最小增益: {args.channel_filter_quantile}/{args.channel_min_gain}\n')
             if args.selection_method == 'oort':
                 f.write(f"- Oort epsilon: {args.oort_epsilon}\n")
                 f.write(f"- Oort epsilon decay/min: {args.oort_epsilon_decay}/{args.oort_epsilon_min}\n")
@@ -1138,7 +1200,10 @@ def save_results(args, exp_folder, timestamp, num_selected, train_loss, train_ac
                 f.write(f"- Oort blacklist rounds: {args.oort_blacklist_rounds}\n")
                 f.write(f"- Oort blacklist max fraction: {args.oort_blacklist_max_fraction}\n")
                 f.write(f"- Oort unexplored sample window: {args.oort_sample_window}\n")
-                f.write("- Oort duration proxy: local training sample count\n")
+                f.write(f"- Oort duration proxy: {args.oort_duration_proxy}\n")
+                f.write(f"- Oort reward cap samples: {args.oort_reward_cap_samples}\n")
+                if args.oort_duration_proxy == 'profile':
+                    f.write(f"- Oort profile sigma/compute weight: {args.oort_profile_sigma}/{args.oort_profile_compute_weight}\n")
             if args.selection_method == 'fedmsv':
                 f.write(f"- Fed-MSV guided prefix m: {args.fedmsv_guided_prefix}\n")
                 f.write(f"- Fed-MSV epsilon_a/b/c: {args.fedmsv_epsilon_a}/{args.fedmsv_epsilon_b}/{args.fedmsv_epsilon_c}\n")
@@ -1209,6 +1274,15 @@ if __name__ == '__main__':
     if not np.isfinite(args.selection_beta) or args.selection_beta <= 0:
         raise ValueError("selection_beta must be a positive finite value")
 
+    if not 0.0 <= args.channel_filter_quantile < 1.0:
+        raise ValueError('channel_filter_quantile must be in [0, 1)')
+    if not np.isfinite(args.channel_min_gain) or args.channel_min_gain < 0.0:
+        raise ValueError('channel_min_gain must be a non-negative finite value')
+    if args.shapley_exploration_slots < 0 or args.shapley_exploration_slots > num_selected:
+        raise ValueError('shapley_exploration_slots must be between 0 and num_selected')
+    if not np.isfinite(args.shapley_ucb_c) or args.shapley_ucb_c < 0.0:
+        raise ValueError('shapley_ucb_c must be a non-negative finite value')
+
     if torch.cuda.is_available() and int(getattr(args, 'gpu', 0)) >= 0:
         device = torch.device(f"cuda:{int(args.gpu)}")
     else:
@@ -1216,6 +1290,13 @@ if __name__ == '__main__':
     print(f"使用设备: {device}")
     print(f"每轮选择的客户端数: {num_selected}")
     print(f"初始轮询轮数: {initial_rounds}")
+
+    print(f'Shapley冷启动模式: {args.shapley_cold_start}')
+    if args.shapley_cold_start == 'online':
+        print(f'在线探索名额: {args.shapley_exploration_slots}, '
+              f'不确定性系数: {args.shapley_ucb_c}')
+    print(f'信道过滤: quantile={args.channel_filter_quantile}, '
+          f'min_gain={args.channel_min_gain}')
 
     # load dataset and user groups
     train_dataset, test_dataset, user_groups = get_dataset(args)
@@ -1312,6 +1393,10 @@ if __name__ == '__main__':
         print(f"utility clip percentile: {args.oort_clip_percentile}")
         print(f"blacklist after >{args.oort_blacklist_rounds} selections, "
               f"cap={args.oort_blacklist_max_fraction:.2f}")
+        print(f"duration proxy: {args.oort_duration_proxy}, reward cap={args.oort_reward_cap_samples}")
+        if args.oort_duration_proxy == 'profile':
+            print(f"profile sigma={args.oort_profile_sigma}, "
+                  f"compute weight={args.oort_profile_compute_weight}")
         print("=" * 60 + "\n")
     else:
         oort_selector = None
@@ -1456,6 +1541,7 @@ if __name__ == '__main__':
     test_accuracies = []
     shapley_time_history = []   # 每轮 Shapley 计算耗时
     dp_round_history = []
+    selection_history = []
     adaptive_clip_norm = max(float(args.dp_clip_norm), 1e-12)
     adaptive_layer_clip_norms = None
 
@@ -1502,6 +1588,25 @@ if __name__ == '__main__':
                 f"but num_selected={num_selected}."
             )
         available_clients = _filter_available_clients(available_clients, trainable_clients)
+        channel_filter_metadata = {
+            'enabled': False,
+            'candidate_count_before': (len(available_clients) if available_clients is not None
+                                       else len(trainable_clients)),
+            'candidate_count_after': (len(available_clients) if available_clients is not None
+                                      else len(trainable_clients)),
+            'quantile_threshold': 0.0,
+            'effective_threshold': 0.0,
+            'fallback_count': 0,
+        }
+        if (args.use_shapley and energy_manager is not None and
+                (args.channel_filter_quantile > 0.0 or args.channel_min_gain > 0.0)):
+            available_clients, channel_filter_metadata = channel_feasible_clients(
+                channel_gains=energy_manager.channel_gains,
+                num_selected=num_selected,
+                available_clients=available_clients,
+                drop_quantile=args.channel_filter_quantile,
+                min_gain=args.channel_min_gain,
+            )
 
         idxs_users = select_clients(
             args, epoch, num_selected, initial_rounds,
@@ -1513,6 +1618,7 @@ if __name__ == '__main__':
             oort_selector=oort_selector,
             fedmsv_selector=fedmsv_selector,
             gca_dsi_signals=gca_dsi_signals,
+            shapley_observation_counts=shapley_observation_counts,
         )
         if available_clients is None:
             selection_candidates = trainable_clients
@@ -1526,6 +1632,23 @@ if __name__ == '__main__':
             idxs_users, selection_candidates, target_selection_count,
             client_participation_counts if client_participation_counts is not None else None
         )
+        selected_gains = (
+            np.asarray(energy_manager.channel_gains)[list(idxs_users)]
+            if energy_manager is not None else np.asarray([], dtype=np.float64)
+        )
+        selection_record = dict(channel_filter_metadata)
+        selection_record.update({
+            'round': int(epoch),
+            'cold_start': getattr(args, 'shapley_cold_start', 'round_robin'),
+            'selected_clients': [int(client_id) for client_id in idxs_users],
+            'selected_gain_min': (float(np.min(selected_gains)) if selected_gains.size else 0.0),
+            'selected_gain_mean': (float(np.mean(selected_gains)) if selected_gains.size else 0.0),
+            'selected_unobserved': (
+                int(np.sum(np.asarray(shapley_observation_counts)[list(idxs_users)] == 0))
+                if shapley_observation_counts is not None else 0
+            ),
+        })
+        selection_history.append(selection_record)
         if fedmsv_selector is not None:
             fedmsv_selector.record_selection(idxs_users)
 
@@ -1584,9 +1707,9 @@ if __name__ == '__main__':
                     # Oort's |B_i| is the data-bin size, not samples counted
                     # repeatedly across multiple local epochs.
                     'num_samples': float(oort_selector.initial_rewards[int(idx)]),
-                    # Source Oort knows a predicted duration for every client
-                    # before selection. Here sample-equivalent local work is
-                    # the only pre-observable, hardware-independent proxy.
+                    # Source Oort registers a predicted duration for every
+                    # client before selection. The configured matched-protocol
+                    # proxy is generated once and kept fixed within this run.
                     'duration': float(oort_selector.initial_durations[int(idx)]),
                     'wallclock_duration': float(local_duration),
                 }
@@ -1918,6 +2041,7 @@ if __name__ == '__main__':
         oort_selector=oort_selector,
         fedmsv_selector=fedmsv_selector,
         fedmsv_low_quality_clients=fedmsv_low_quality_clients,
+        selection_history=selection_history,
     )
 
     print('\n Total Run Time: {0:0.4f} seconds'.format(time.time() - start_time))

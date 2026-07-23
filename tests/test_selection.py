@@ -7,7 +7,9 @@ import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from selection import OortSelector, softmax_score_selection
+from selection import (OortSelector, build_oort_client_priors,
+                       channel_feasible_clients, online_exploration_selection,
+                       softmax_score_selection)
 
 
 class SoftmaxScoreSelectionTests(unittest.TestCase):
@@ -49,6 +51,36 @@ class SoftmaxScoreSelectionTests(unittest.TestCase):
     def test_rejects_non_positive_temperature(self):
         with self.assertRaises(ValueError):
             softmax_score_selection(np.array([0.0, 1.0]), 1, temperature=0.0)
+
+
+class OnlineColdStartSelectionTests(unittest.TestCase):
+    def test_first_round_uses_non_shapley_scores(self):
+        selected = online_exploration_selection(
+            scores=np.array([0.0, 1.0, 10.0]),
+            observation_counts=np.zeros(3), num_selected=1,
+            exploration_slots=1, temperature=0.01, rng=np.random.RandomState(3))
+        self.assertEqual(selected, [2])
+
+    def test_reserves_one_slot_for_unobserved_client(self):
+        selected = online_exploration_selection(
+            scores=np.array([10.0, 1.0, 2.0, 3.0]),
+            observation_counts=np.array([1, 0, 0, 0]), num_selected=2,
+            exploration_slots=1, temperature=0.01, rng=np.random.RandomState(3))
+        self.assertEqual(set(selected), {0, 3})
+
+
+class ChannelFeasibilityTests(unittest.TestCase):
+    def test_quantile_filter_removes_poor_channels(self):
+        selected, metadata = channel_feasible_clients(
+            np.array([0.1, 0.2, 1.0, 2.0]), num_selected=2, drop_quantile=0.5)
+        self.assertEqual(set(selected), {2, 3})
+        self.assertEqual(metadata['candidate_count_after'], 2)
+
+    def test_fallback_restores_best_channels(self):
+        selected, metadata = channel_feasible_clients(
+            np.array([0.1, 0.2, 1.0, 2.0]), num_selected=2, min_gain=10.0)
+        self.assertEqual(set(selected), {2, 3})
+        self.assertEqual(metadata['fallback_count'], 2)
 
 
 class OortSelectorTests(unittest.TestCase):
@@ -111,6 +143,31 @@ class OortSelectorTests(unittest.TestCase):
         )
         selector._update_target_duration()
         self.assertEqual(selector.target_duration, 3.0)
+
+
+class OortClientPriorTests(unittest.TestCase):
+    def test_profile_priors_are_deterministic_and_capped(self):
+        sizes = np.array([50.0, 200.0, 800.0, 1200.0])
+        first = build_oort_client_priors(
+            sizes, duration_proxy='profile', reward_cap_samples=640,
+            profile_sigma=0.5, profile_compute_weight=0.5, seed=42,
+        )
+        second = build_oort_client_priors(
+            sizes, duration_proxy='profile', reward_cap_samples=640,
+            profile_sigma=0.5, profile_compute_weight=0.5, seed=42,
+        )
+        np.testing.assert_allclose(first[0], [50.0, 200.0, 640.0, 640.0])
+        np.testing.assert_allclose(first[0], second[0])
+        np.testing.assert_allclose(first[1], second[1])
+        self.assertAlmostEqual(float(np.median(first[1])), 1.0)
+        self.assertEqual(first[2]['profile_seed'], 104771)
+
+    def test_equal_proxy_removes_system_duration_differences(self):
+        _, durations, metadata = build_oort_client_priors(
+            np.array([10.0, 100.0, 1000.0]), duration_proxy='equal'
+        )
+        np.testing.assert_allclose(durations, np.ones(3))
+        self.assertEqual(metadata['duration_proxy'], 'equal')
 
 
 if __name__ == "__main__":

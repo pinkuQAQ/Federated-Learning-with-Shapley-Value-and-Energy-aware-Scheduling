@@ -12,6 +12,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from federated_main import (
     _add_central_dp_noise,
+    _online_shapley_estimates,
     _resolve_initial_rounds,
     update_shapley_values,
 )
@@ -55,6 +56,17 @@ class FederatedAlignmentTests(unittest.TestCase):
         args = SimpleNamespace(initial_rounds=None, num_users=101, num_selected=5)
 
         self.assertEqual(_resolve_initial_rounds(args), 21)
+
+    def test_online_cold_start_disables_forced_warmup(self):
+        args = SimpleNamespace(initial_rounds=None, num_users=100, num_selected=5,
+                               shapley_cold_start='online')
+        self.assertEqual(_resolve_initial_rounds(args), 0)
+
+    def test_online_prior_is_finite_and_rewards_unobserved_clients(self):
+        estimates = _online_shapley_estimates(
+            np.array([0.2, 0.8, 0.0]), np.array([2, 1, 0]), epoch=3, bonus_c=0.25)
+        self.assertTrue(np.all(np.isfinite(estimates)))
+        self.assertGreater(estimates[2], 0.5)
 
     def test_noise_uses_fixed_inverse_selected_count(self):
         args = SimpleNamespace(
